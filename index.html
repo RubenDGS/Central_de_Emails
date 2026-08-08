@@ -23,7 +23,7 @@ label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}input,selec
 <div class="wrap">
   <div class="top">
     <h1>🔧 Ajuste de Imagem Térmica</h1>
-    <p>Fotografa a chapa, confirma os valores e recebe diretamente o que injetar e o que regular.</p>
+    <p>Fotografa a chapa, confirma os valores e recebe diretamente o que injetar e o que regular. <span class="badge">v5 teste</span></p>
   </div>
 
   <section class="card">
@@ -42,7 +42,8 @@ label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}input,selec
       <div><label for="tip">TI primário (A)</label><input id="tip" type="number" inputmode="decimal" step="0.1" placeholder="Ex.: 600"></div>
       <div><label for="tis">TI secundário (A)</label><input id="tis" type="number" inputmode="decimal" step="0.1" placeholder="Ex.: 2"></div>
     </div>
-    <p class="muted">Se a leitura automática falhar num número, podes corrigi-lo aqui antes de calcular.</p>
+    <div id="candidatos" class="status hide"></div>
+    <p class="muted">A aplicação tenta relacionar a zona “Imagem térmica / Transformador de corrente” com as correntes da chapa. Se houver mais de um regime, mostra as opções para confirmares antes do cálculo.</p>
   </section>
 
   <section class="card">
@@ -104,39 +105,63 @@ $('fotoGaleria').addEventListener('change',carregarImagem);
 function parseNumber(s){return parseFloat(String(s).replace(/\s/g,'').replace(',','.'));}
 
 function extractPlateData(raw){
-  const text=raw.replace(/,/g,'.').replace(/[×xX]/g,'x');
-  const lines=text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-  let ct=null;
-  const ctPatterns=[
-    /(?:TI|CT|CURRENT\s*TRANSFORMER|TRANSFORMER\s*CURRENT)[^\n]{0,35}?(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)/i,
-    /(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)\s*A\b/i,
-    /(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)/i
-  ];
-  for(const p of ctPatterns){const m=text.match(p);if(m){const a=parseNumber(m[1]),b=parseNumber(m[2]);if(a>=20 && b>0 && b<=10){ct={pri:a,sec:b};break}}}
+  const text=raw.replace(/,/g,'.').replace(/[×xX]/g,'x').replace(/[|]/g,' ');
+  const lines=text.split(/\r?\n/).map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
 
-  const amps=[];
+  // 1) Procurar primeiro o TI junto de palavras que identificam a imagem térmica.
+  const contextLines=[];
+  lines.forEach((line,i)=>{
+    if(/imagem\s*t[eé]rmica|thermal|winding\s*temp|transformador\s+de\s+corrente|current\s+transformer|\bT1\b/i.test(line)){
+      for(let j=Math.max(0,i-2);j<=Math.min(lines.length-1,i+3);j++) contextLines.push(lines[j]);
+    }
+  });
+  const context=contextLines.join(' ');
+  let ct=null;
+  const ctRegex=/(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)/g;
+  const chooseCT=(str)=>{
+    const arr=[]; let m;
+    while((m=ctRegex.exec(str))){const a=parseNumber(m[1]),b=parseNumber(m[2]); if(a>=20&&a<=10000&&b>0&&b<=10) arr.push({pri:a,sec:b});}
+    return arr.length?arr[0]:null;
+  };
+  ct=chooseCT(context)||chooseCT(text);
+
+  // 2) Recolher correntes nominais candidatas. Não escolher silenciosamente se houver vários regimes.
+  const candidates=[];
+  const add=(v,line,score)=>{
+    if(!(v>10&&v<10000)) return;
+    if(ct && Math.abs(v-ct.pri)<0.2) return;
+    if(!candidates.some(x=>Math.abs(x.v-v)<0.05)) candidates.push({v,line,score});
+  };
   for(const line of lines){
-    const matches=[...line.matchAll(/(\d{2,5}(?:\.\d+)?)\s*A\b/gi)];
-    for(const m of matches){
-      const v=parseNumber(m[1]);
-      if(v>10 && (!ct || Math.abs(v-ct.pri)>0.1)){
-        let score=0;
-        if(/(?:I\s*N|IN|RATED\s*CURRENT|CURRENT|CORRENTE|AMP)/i.test(line)) score+=5;
-        if(/LV|BT|LOW\s*VOLT|SEC|SECONDARY|ENROLAMENTO/i.test(line)) score+=2;
-        if(/HV|AT|HIGH\s*VOLT|PRIMARY/i.test(line)) score-=1;
-        amps.push({v,score,line});
-      }
+    let score=0;
+    if(/corrente|current|amps?|\bA\b/i.test(line)) score+=3;
+    if(/estipulada|nominal|rated|in\b/i.test(line)) score+=4;
+    if(/bt|lv|low voltage|secund[aá]rio|enrolamento/i.test(line)) score+=2;
+    if(/transformador de corrente|current transformer|imagem t[eé]rmica|thermal/i.test(line)) score-=4;
+    for(const m of line.matchAll(/\b(\d{2,4}(?:\.\d+)?)\s*A\b/gi)) add(parseNumber(m[1]),line,score);
+    // tabelas muitas vezes perdem o "A" no OCR: pares 866/615, 275/195, etc.
+    for(const m of line.matchAll(/\b(\d{2,4}(?:\.\d+)?)\s*[\/]\s*(\d{2,4}(?:\.\d+)?)\b/g)){
+      const a=parseNumber(m[1]),b=parseNumber(m[2]);
+      if(a>10&&b>10){add(a,line,score+2);add(b,line,score+2);}
     }
   }
-  amps.sort((a,b)=>b.score-a.score || b.v-a.v);
-  let nominal=amps.length?amps[0].v:null;
+  candidates.sort((a,b)=>b.score-a.score || b.v-a.v);
+  const top=candidates.slice(0,8);
+  let nominal=null;
+  if(top.length===1) nominal=top[0].v;
+  else if(top.length>1 && top[0].score>=top[1].score+4) nominal=top[0].v;
+  return {ct,nominal,candidates:top,context};
+}
 
-  // Fallback useful for common European decimal OCR when A is separated or missed.
-  if(!nominal){
-    const decimals=[...text.matchAll(/\b(\d{2,4}\.\d)\b/g)].map(m=>parseNumber(m[1])).filter(v=>v>20 && (!ct || Math.abs(v-ct.pri)>0.1));
-    if(decimals.length) nominal=decimals[0];
-  }
-  return {ct,nominal};
+function showCandidates(found){
+  const box=$('candidatos');
+  if(!found.candidates||!found.candidates.length){box.classList.add('hide');return;}
+  const vals=found.candidates.map(x=>x.v).filter((v,i,a)=>a.indexOf(v)===i).slice(0,6);
+  if(vals.length<=1){box.classList.add('hide');return;}
+  box.className='status warn';
+  box.innerHTML='<b>Encontrei várias correntes possíveis na chapa.</b><br>Escolhe a corrente nominal do enrolamento usada para a imagem térmica:<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:8px">'+vals.map(v=>`<button type="button" class="pickAmp" data-v="${v}" style="border:1px solid #d5a72b;background:white;border-radius:9px;padding:8px 10px;font-weight:700">${fmt(v,1)} A</button>`).join('')+'</div>';
+  box.classList.remove('hide');
+  box.querySelectorAll('.pickAmp').forEach(b=>b.addEventListener('click',()=>{$('inom').value=b.dataset.v;box.className='status ok';box.textContent='Corrente nominal confirmada: '+fmt(parseNumber(b.dataset.v),1)+' A.';}));
 }
 
 $('ler').addEventListener('click',async()=>{
@@ -158,11 +183,12 @@ $('ler').addEventListener('click',async()=>{
     const raw=result.data.text||'';
     $('ocrText').textContent=raw;$('ocrDetails').classList.remove('hide');
     const found=extractPlateData(raw);
+    showCandidates(found);
     let msgs=[];
     if(found.nominal){$('inom').value=found.nominal;msgs.push('corrente nominal '+fmt(found.nominal,1)+' A');}
     if(found.ct){$('tip').value=found.ct.pri;$('tis').value=found.ct.sec;msgs.push('TI '+fmt(found.ct.pri,0)+'/'+fmt(found.ct.sec,0)+' A');}
     if(msgs.length){$('estado').className='status ok';$('estado').textContent='Reconhecido: '+msgs.join(' • ')+'. Confirma os campos antes de calcular.';}
-    else{$('estado').className='status warn';$('estado').textContent='Consegui ler texto, mas não identifiquei com segurança a corrente nominal e o TI. Vê o texto reconhecido e preenche/corrige os campos manualmente.';}
+    else{$('estado').className='status warn';$('estado').textContent='Li a chapa, mas não consegui fechar os dados com segurança. Se aparecerem correntes candidatas abaixo, escolhe a correta; caso contrário confirma manualmente.';}
   }catch(err){console.error(err);$('estado').className='status err';$('estado').textContent='Não consegui fazer a leitura automática desta fotografia. Tenta uma foto mais direita e nítida ou preenche os campos manualmente.';}
   finally{$('ler').disabled=false;}
 });
