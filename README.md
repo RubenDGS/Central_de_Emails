@@ -1,0 +1,1 @@
+# Imagem-t-rmica-
