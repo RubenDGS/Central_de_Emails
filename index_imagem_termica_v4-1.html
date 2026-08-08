@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b67c2">
+<title>Ajuste de Imagem Térmica</title>
+<style>
+:root{--bg:#f3f6fb;--card:#fff;--text:#142033;--muted:#667085;--line:#d8dee9;--blue:#0b67c2;--green:#177245;--amber:#9a6700;--red:#b42318}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Arial,Helvetica,sans-serif;color:var(--text)}
+.wrap{max-width:820px;margin:auto;padding:16px 14px 40px}.top{padding:8px 2px 2px}.top h1{font-size:24px;margin:0 0 5px}.top p{margin:0;color:var(--muted);font-size:14px}
+.card{background:var(--card);border:1px solid #e8ecf2;border-radius:16px;padding:16px;margin-top:12px;box-shadow:0 2px 10px #16243a0b}.card h2{font-size:17px;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}@media(max-width:620px){.grid,.grid3{grid-template-columns:1fr}}
+label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}input,select{width:100%;border:1px solid var(--line);border-radius:11px;padding:11px 12px;background:#fff;font-size:16px;color:var(--text)}input:focus,select:focus{outline:2px solid #99c7f4;outline-offset:1px}
+.btn{width:100%;border:0;border-radius:12px;padding:13px 14px;font-size:16px;font-weight:800;cursor:pointer}.primary{background:var(--blue);color:#fff}.secondary{background:#eaf3fc;color:#0b4e8d}.btn:disabled{opacity:.55;cursor:not-allowed}.mt{margin-top:12px}.muted{color:var(--muted);font-size:13px;line-height:1.45}.status{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:14px;background:#f4f7fb}.status.ok{background:#edf8f1;color:#145b39}.status.warn{background:#fff7e6;color:#805500}.status.err{background:#fff0ef;color:#8f241d}
+.preview{display:none;width:100%;max-height:360px;object-fit:contain;background:#111;border-radius:12px;margin-top:10px}.preview.show{display:block}
+.badge{display:inline-block;border-radius:999px;padding:5px 8px;background:#eef4fb;color:#24537d;font-size:12px;font-weight:700}.resultGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}@media(max-width:620px){.resultGrid{grid-template-columns:1fr}}
+.resultCard{border-radius:14px;padding:15px;border:1px solid #dbe5ef;background:#f9fbfd}.resultCard strong{display:block;font-size:28px;margin-top:6px}.resultCard small{display:block;color:var(--muted);margin-top:5px}.resultCard.main{border-color:#b8d8f5;background:#eef7ff}.resultCard.good{border-color:#bfe1ce;background:#eff9f3}.resultCard.ohm{border-color:#ead8a2;background:#fff9e9}
+.hide{display:none!important}details{margin-top:12px}summary{cursor:pointer;font-weight:700}.ocrbox{white-space:pre-wrap;max-height:180px;overflow:auto;background:#f7f8fa;border:1px solid #e3e6eb;border-radius:10px;padding:10px;font-family:monospace;font-size:12px}.note{border-left:4px solid #f0b429;padding:9px 11px;background:#fff9e8;border-radius:8px;font-size:13px;line-height:1.45}.footer{color:var(--muted);font-size:12px;margin-top:14px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>🔧 Ajuste de Imagem Térmica</h1>
+    <p>Fotografa a chapa, confirma os valores e recebe diretamente o que injetar e o que regular.</p>
+  </div>
+
+  <section class="card">
+    <h2>1. 📷 Ler chapa do transformador</h2>
+    <div class="grid2"><div><label for="fotoCamera">Fotografar agora</label><input id="fotoCamera" type="file" accept="image/*" capture="environment"></div><div><label for="fotoGaleria">Usar fotografia existente</label><input id="fotoGaleria" type="file" accept="image/*"></div></div>
+    <img id="preview" class="preview" alt="Pré-visualização da chapa">
+    <button id="ler" class="btn primary mt" type="button">LER CHAPA</button>
+    <div id="estado" class="status">Escolhe ou tira uma fotografia nítida da chapa.</div>
+    <details id="ocrDetails" class="hide"><summary>Ver texto reconhecido</summary><div id="ocrText" class="ocrbox"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>2. ✅ Confirmar dados reconhecidos</h2>
+    <div class="grid3">
+      <div><label for="inom">Corrente nominal do enrolamento (A)</label><input id="inom" type="number" inputmode="decimal" step="0.1" placeholder="Ex.: 519,6"></div>
+      <div><label for="tip">TI primário (A)</label><input id="tip" type="number" inputmode="decimal" step="0.1" placeholder="Ex.: 600"></div>
+      <div><label for="tis">TI secundário (A)</label><input id="tis" type="number" inputmode="decimal" step="0.1" placeholder="Ex.: 2"></div>
+    </div>
+    <p class="muted">Se a leitura automática falhar num número, podes corrigi-lo aqui antes de calcular.</p>
+  </section>
+
+  <section class="card">
+    <h2>3. 🌡️ Escolher ajuste</h2>
+    <div class="grid">
+      <div>
+        <label for="modelo">Modelo / método da imagem térmica</label>
+        <select id="modelo">
+          <option value="betech">MR MESSKO BETECH</option>
+          <option value="procedimento">Imagem térmica retangular do procedimento enviado</option>
+          <option value="compactW">MR MESSKO COMPACT MT-ST160W</option>
+          <option value="compactWR">MR MESSKO COMPACT MT-ST160WR</option>
+        </select>
+      </div>
+      <div><label for="grad">Gradiente pretendido (°C / K)</label><input id="grad" type="number" inputmode="decimal" step="0.5" min="1" value="20"></div>
+    </div>
+
+    <div id="betechOpts" class="grid mt">
+      <div><label for="sensor">Tipo de sensor BETECH</label><select id="sensor"><option value="grp1">1 / 2 / 2F / 5 / 8 / 22 / 27</option><option value="6">6</option><option value="9_10">9 / 10</option></select></div>
+      <div><label for="range">Gama de medição</label><select id="range"><option value="A">A: 0…150 °C</option><option value="C">C: -20…130 °C</option><option value="E">E: 0…160 °C</option><option value="G">G: -40…160 °C</option></select></div>
+    </div>
+
+    <button id="calc" class="btn primary mt" type="button">CALCULAR AJUSTE</button>
+  </section>
+
+  <section id="resultados" class="card hide" aria-live="polite">
+    <h2>4. 🛠️ O que fazer</h2>
+    <div class="resultGrid">
+      <div class="resultCard main"><span>⚡ NA FONTE</span><strong id="resFonte">—</strong><small id="fonteDesc">INJETAR</small></div>
+      <div class="resultCard good"><span>🔧 NA IMAGEM TÉRMICA</span><strong id="resA">—</strong><small id="aDesc">REGULAR / MEDIR</small></div>
+      <div class="resultCard ohm"><span>🧰 EM OHMS</span><strong id="resOhm">—</strong><small id="ohmDesc">VALOR DE REFERÊNCIA</small></div>
+    </div>
+    <div id="instrucao" class="status ok mt"></div>
+    <div id="aviso" class="note mt hide"></div>
+    <details><summary>Ver cálculos e origem do valor</summary><div id="detalhes" class="muted mt"></div></details>
+  </section>
+
+  <div class="footer">Confirma sempre o modelo e os valores reconhecidos antes de aplicar o ajuste.</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let imageFile=null;
+const fmt=(n,d=2)=>Number(n).toLocaleString('pt-PT',{minimumFractionDigits:d,maximumFractionDigits:d});
+
+function carregarImagem(e){
+  imageFile=e.target.files && e.target.files[0] ? e.target.files[0] : null;
+  if(imageFile){
+    $('preview').src=URL.createObjectURL(imageFile);
+    $('preview').classList.add('show');
+    $('estado').className='status';
+    $('estado').textContent='Fotografia carregada. Carrega em LER CHAPA.';
+  }
+}
+$('fotoCamera').addEventListener('change',carregarImagem);
+$('fotoGaleria').addEventListener('change',carregarImagem);
+
+function parseNumber(s){return parseFloat(String(s).replace(/\s/g,'').replace(',','.'));}
+
+function extractPlateData(raw){
+  const text=raw.replace(/,/g,'.').replace(/[×xX]/g,'x');
+  const lines=text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  let ct=null;
+  const ctPatterns=[
+    /(?:TI|CT|CURRENT\s*TRANSFORMER|TRANSFORMER\s*CURRENT)[^\n]{0,35}?(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)/i,
+    /(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)\s*A\b/i,
+    /(\d{2,5}(?:\.\d+)?)\s*[\/:]\s*(\d(?:\.\d+)?)/i
+  ];
+  for(const p of ctPatterns){const m=text.match(p);if(m){const a=parseNumber(m[1]),b=parseNumber(m[2]);if(a>=20 && b>0 && b<=10){ct={pri:a,sec:b};break}}}
+
+  const amps=[];
+  for(const line of lines){
+    const matches=[...line.matchAll(/(\d{2,5}(?:\.\d+)?)\s*A\b/gi)];
+    for(const m of matches){
+      const v=parseNumber(m[1]);
+      if(v>10 && (!ct || Math.abs(v-ct.pri)>0.1)){
+        let score=0;
+        if(/(?:I\s*N|IN|RATED\s*CURRENT|CURRENT|CORRENTE|AMP)/i.test(line)) score+=5;
+        if(/LV|BT|LOW\s*VOLT|SEC|SECONDARY|ENROLAMENTO/i.test(line)) score+=2;
+        if(/HV|AT|HIGH\s*VOLT|PRIMARY/i.test(line)) score-=1;
+        amps.push({v,score,line});
+      }
+    }
+  }
+  amps.sort((a,b)=>b.score-a.score || b.v-a.v);
+  let nominal=amps.length?amps[0].v:null;
+
+  // Fallback useful for common European decimal OCR when A is separated or missed.
+  if(!nominal){
+    const decimals=[...text.matchAll(/\b(\d{2,4}\.\d)\b/g)].map(m=>parseNumber(m[1])).filter(v=>v>20 && (!ct || Math.abs(v-ct.pri)>0.1));
+    if(decimals.length) nominal=decimals[0];
+  }
+  return {ct,nominal};
+}
+
+$('ler').addEventListener('click',async()=>{
+  if(!imageFile){$('estado').className='status warn';$('estado').textContent='Escolhe primeiro uma fotografia.';return;}
+  if(typeof Tesseract==='undefined'){$('estado').className='status err';$('estado').textContent='O módulo de leitura não carregou. Abre esta página através de um site (ex.: GitHub Pages) e confirma que tens internet.';return;}
+  $('ler').disabled=true;
+  $('estado').className='status';$('estado').textContent='A preparar a fotografia…';
+  try{
+    const src=await createImageBitmap(imageFile);
+    const scale=Math.min(3,Math.max(1.5,1800/src.width));
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.round(src.width*scale);canvas.height=Math.round(src.height*scale);
+    const ctx=canvas.getContext('2d');ctx.drawImage(src,0,0,canvas.width,canvas.height);
+    const img=ctx.getImageData(0,0,canvas.width,canvas.height);const d=img.data;
+    for(let i=0;i<d.length;i+=4){const y=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];const c=y<145?Math.max(0,y*0.55):Math.min(255,128+(y-128)*1.55);d[i]=d[i+1]=d[i+2]=c;}
+    ctx.putImageData(img,0,0);
+    $('estado').textContent='A ler a chapa… pode demorar alguns segundos.';
+    const result=await Tesseract.recognize(canvas,'eng',{logger:m=>{if(m.status==='recognizing text')$('estado').textContent='A ler a chapa… '+Math.round((m.progress||0)*100)+'%';}});
+    const raw=result.data.text||'';
+    $('ocrText').textContent=raw;$('ocrDetails').classList.remove('hide');
+    const found=extractPlateData(raw);
+    let msgs=[];
+    if(found.nominal){$('inom').value=found.nominal;msgs.push('corrente nominal '+fmt(found.nominal,1)+' A');}
+    if(found.ct){$('tip').value=found.ct.pri;$('tis').value=found.ct.sec;msgs.push('TI '+fmt(found.ct.pri,0)+'/'+fmt(found.ct.sec,0)+' A');}
+    if(msgs.length){$('estado').className='status ok';$('estado').textContent='Reconhecido: '+msgs.join(' • ')+'. Confirma os campos antes de calcular.';}
+    else{$('estado').className='status warn';$('estado').textContent='Consegui ler texto, mas não identifiquei com segurança a corrente nominal e o TI. Vê o texto reconhecido e preenche/corrige os campos manualmente.';}
+  }catch(err){console.error(err);$('estado').className='status err';$('estado').textContent='Não consegui fazer a leitura automática desta fotografia. Tenta uma foto mais direita e nítida ou preenche os campos manualmente.';}
+  finally{$('ler').disabled=false;}
+});
+
+const K={grp1:{A:22,C:22,E:23.5,G:29},'6':{A:24.5,C:24.5,E:26,G:32.5},'9_10':{A:24,C:24,E:25.5,G:32}};
+function updateModel(){const b=$('modelo').value==='betech';$('betechOpts').classList.toggle('hide',!b);} $('modelo').addEventListener('change',updateModel);updateModel();
+
+$('calc').addEventListener('click',()=>{
+  const inom=parseNumber($('inom').value),tip=parseNumber($('tip').value),tis=parseNumber($('tis').value),g=parseNumber($('grad').value),model=$('modelo').value;
+  if(!(inom>0&&tip>0&&tis>0&&g>0)){alert('Confirma a corrente nominal, o TI e o gradiente.');return;}
+  const i1=inom*tis/tip;
+  let i2=null,ohm=null,ohmText='—',instruction='',warning='',details='';
+
+  if(model==='betech'){
+    const k=K[$('sensor').value][$('range').value];
+    i2=Math.sqrt(g/k);
+    instruction=`Injetar ${fmt(i1)} A e regular o circuito de aquecimento para ${fmt(i2)} A.`;
+    details=`I1 = ${fmt(inom,1)} × ${fmt(tis,1)} ÷ ${fmt(tip,1)} = ${fmt(i1,3)} A. Para BETECH: G = K × Ih², com K = ${fmt(k,1)}. Assim Ih = √(${fmt(g,1)} ÷ ${fmt(k,1)}) = ${fmt(i2,3)} A.`;
+    warning='No BETECH, o valor em Ω depende da curva de resistência do tipo de sensor, gama e corrente do TI. Nesta versão não é inventado um valor: só será mostrado quando essa curva estiver carregada/digitalizada.';
+  } else if(model==='procedimento'){
+    if(Math.abs(g-20)<0.01){i2=1.04;const ratio=i2/i1;if(Math.abs(ratio-0.60)<=0.04)ohm=1.3;
+      instruction=`Injetar ${fmt(i1)} A. Regular a resistência 5-5 até medir ${fmt(i2)} A no ramo indicado.`;
+      details=`I1 = ${fmt(inom,1)} × ${fmt(tis,1)} ÷ ${fmt(tip,1)} = ${fmt(i1,3)} A. No procedimento enviado, para 20 °C: I2 = 1,04 A. I2/I1 = ${fmt(ratio,3)}.`;
+      if(!ohm) warning='O procedimento enviado só valida aproximadamente 1,3 Ω quando I2/I1 ≈ 0,60. Com estes dados a relação ficou diferente, por isso não mostro um Ω inventado.';
+    } else {warning='Para este modelo do procedimento enviado, só temos validado o ponto de 20 °C = 1,04 A. Para outro gradiente é necessário carregar a tabela/curva correta do manual.';details='Cálculo bloqueado para evitar extrapolação não validada.';}
+  } else if(model==='compactW'){
+    if(Math.abs(g-20)<0.01){
+      // Official manual example: nominal secondary current 2 A, 20 K -> heating current 1.05 A.
+      i2=1.05;instruction=`No COMPACT MT-ST160W, injetar a corrente secundária nominal do equipamento. Para o exemplo oficial de 20 K, regular a corrente de aquecimento para ${fmt(i2)} A.`;
+      details=`Manual MR COMPACT MT-ST160W: exemplo oficial 20 K → corrente de aquecimento 1,05 A, com corrente secundária nominal de 2,0 A.`;
+      warning='A curva completa do MT-ST160W ainda não está digitalizada nesta versão. Para gradientes diferentes de 20 K, não uso interpolação inventada.';
+    } else {warning='A curva completa do COMPACT MT-ST160W ainda não está digitalizada. Nesta versão apenas está validado o exemplo oficial de 20 K → 1,05 A.';details='Cálculo bloqueado para este gradiente.';}
+  } else if(model==='compactWR'){
+    if(Math.abs(g-26)<0.01 && Math.abs(tis-1.9)<0.06){ohm=6.2;instruction='No COMPACT MT-ST160WR, retirar a ponte 4-5, medir entre 3-6 e ajustar o potenciómetro até 6,2 Ω.';details='Exemplo oficial MR: corrente secundária nominal 1,9 A + gradiente 26 K → 6,2 Ω.';}
+    else {warning='Para o COMPACT MT-ST160WR, nesta versão só está carregado o exemplo oficial 1,9 A + 26 K → 6,2 Ω. É necessária a curva completa para outros valores.';details='Cálculo em Ω bloqueado para evitar extrapolação.';}
+  }
+
+  $('resFonte').textContent=(model==='compactWR')?'Ver método':fmt(i1)+' A';
+  $('resA').textContent=i2!==null?fmt(i2)+' A':'—';
+  $('resOhm').textContent=ohm!==null?fmt(ohm,1)+' Ω':ohmText;
+  $('instrucao').textContent=instruction||'Confirma os avisos abaixo antes de ajustar.';
+  $('aviso').textContent=warning;$('aviso').classList.toggle('hide',!warning);
+  $('detalhes').textContent=details;
+  $('resultados').classList.remove('hide');$('resultados').scrollIntoView({behavior:'smooth',block:'start'});
+});
+</script>
+</body>
+</html>
