@@ -94,16 +94,9 @@ class MainActivity : Activity() {
         currentSession?.setFocused(true)
     }
 
-    override fun onBackPressed() {
-        val session = currentSession
-        if (session == null) {
-            super.onBackPressed()
-            return
-        }
-        session.processBackPressed().accept { handled ->
-            if (handled != true) super.onBackPressed()
-        }
-    }
+ override fun onBackPressed() {
+    super.onBackPressed()
+}
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 &&
