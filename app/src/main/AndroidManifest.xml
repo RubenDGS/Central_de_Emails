@@ -6,7 +6,7 @@
     <application
         android:name=".Caixa6App"
         android:allowBackup="true"
-        android:label="Caixa6"
+        android:label="Central de Emails"
         android:theme="@style/AppTheme">
 
         <activity
