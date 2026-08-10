@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'pt.caixa6'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "pt.caixa6"
+        minSdk 26
+        targetSdk 33
+        versionCode 1
+        versionName "0.1"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation "org.mozilla.geckoview:geckoview-nightly:155.0.20260807094615"
+}
