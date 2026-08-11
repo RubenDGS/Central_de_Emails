@@ -1,16 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission
-        android:name="android.permission.INTERNET"/>
+        android:name="android.permission.INTERNET" />
 
     <uses-permission
-        android:name="android.permission.POST_NOTIFICATIONS"/>
+        android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"/>
+        android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".Caixa6App"
@@ -28,10 +28,10 @@
             <intent-filter>
 
                 <action
-                    android:name="android.intent.action.MAIN"/>
+                    android:name="android.intent.action.MAIN" />
 
                 <category
-                    android:name="android.intent.category.LAUNCHER"/>
+                    android:name="android.intent.category.LAUNCHER" />
 
             </intent-filter>
 
@@ -40,7 +40,7 @@
         <service
             android:name=".KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync"/>
+            android:foregroundServiceType="dataSync" />
 
     </application>
 
