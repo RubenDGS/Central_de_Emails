@@ -7,10 +7,10 @@ data class Account(
 )
 
 val DEFAULT_ACCOUNTS = listOf(
-    Account("sapo1", "SAPO 1", "https://mail.sapo.pt/"),
-    Account("sapo2", "SAPO 2", "https://mail.sapo.pt/"),
-    Account("sapo3", "SAPO 3", "https://mail.sapo.pt/"),
-    Account("sapo4", "SAPO 4", "https://mail.sapo.pt/"),
-    Account("sapo5", "SAPO 5", "https://mail.sapo.pt/"),
-    Account("gmail", "Gmail", "https://mail.google.com/")
+    Account("rita_sapo", "Rita Sapo", "https://mail.sapo.pt/"),
+    Account("pai_sapo", "Pai Sapo", "https://mail.sapo.pt/"),
+    Account("leonor_sapo", "Leonor Sapo", "https://mail.sapo.pt/"),
+    Account("daniela_sapo", "Daniela Sapo", "https://mail.sapo.pt/"),
+    Account("mae_sapo", "Mãe Sapo", "https://mail.sapo.pt/"),
+    Account("rita_gmail", "Rita Gmail", "https://mail.google.com/")
 )
