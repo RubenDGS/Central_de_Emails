@@ -5,9 +5,37 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 
 class KeepAliveService : Service() {
+
+    private val handler =
+        Handler(
+            Looper.getMainLooper()
+        )
+
+    private val keepAliveTask =
+        object : Runnable {
+
+            override fun run() {
+
+                val app =
+                    application as Caixa6App
+
+                app.keepSessionsActive()
+
+                /*
+                 * Volta a confirmar as sessões
+                 * a cada minuto.
+                 */
+                handler.postDelayed(
+                    this,
+                    60_000L
+                )
+            }
+        }
 
     override fun onCreate() {
         super.onCreate()
@@ -49,7 +77,7 @@ class KeepAliveService : Service() {
                     "Central de Emails"
                 )
                 .setContentText(
-                    "Central de Emails ativa."
+                    "A verificar novos emails."
                 )
                 .setContentIntent(
                     pendingIntent
@@ -61,6 +89,10 @@ class KeepAliveService : Service() {
             60,
             notification
         )
+
+        handler.post(
+            keepAliveTask
+        )
     }
 
     override fun onStartCommand(
@@ -70,6 +102,15 @@ class KeepAliveService : Service() {
     ): Int {
 
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+
+        handler.removeCallbacks(
+            keepAliveTask
+        )
+
+        super.onDestroy()
     }
 
     override fun onBind(
