@@ -1,0 +1,31 @@
+CENTRAL DE EMAILS v0.4
+
+SUBSTITUIR:
+- app/src/main/java/pt/caixa6/Account.kt
+- app/src/main/java/pt/caixa6/Caixa6App.kt
+- app/src/main/java/pt/caixa6/MainActivity.kt
+- app/src/main/AndroidManifest.xml
+- app/build.gradle
+
+NÃO ALTERAR:
+- .github/workflows/build-apk.yml
+- Secrets da assinatura
+- ícones
+- background_pastel.png
+
+ALTERAÇÕES:
+- Ordem: Rita Sapo, Rita Gmail, Mãe Sapo, Pai Sapo, Daniela Sapo, Leonor Sapo.
+- Conta ativa destacada.
+- Pai com contorno vermelho pastel.
+- SAPO abre sempre na Caixa de Entrada.
+- Remove o foreground service e a notificação permanente "A verificar novos emails".
+- Refresca sessões SAPO enquanto o processo da app continuar vivo.
+- Inclui Rita Sapo no refresco quando a app está em background.
+- Notificações passam a mostrar a conta provável que as originou.
+- Contador local (n) nos botões SAPO: conta notificações novas desde a última abertura da conta.
+- Gmail mantém-se no botão Rita Gmail, mas abre a app Gmail oficial, porque o Gmail embebido ficou instável.
+
+IMPORTANTE:
+- O contador (n) é local; não consulta o total real de não lidos no servidor SAPO.
+- A identificação da conta na notificação é feita com base na sessão que a app está a atualizar/usar naquele momento. Deve funcionar nos testes normais, mas não é uma garantia absoluta do SAPO.
+- Sem foreground service deixa de existir a notificação permanente, mas o Android pode suspender ou terminar a app em background. Logo, as notificações podem deixar de ser instantâneas se o sistema matar o processo.
