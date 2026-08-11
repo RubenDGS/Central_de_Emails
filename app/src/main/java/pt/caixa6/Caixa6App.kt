@@ -32,10 +32,6 @@ class Caixa6App : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        /*
-         * Gecko continua a arrancar apenas
-         * quando se toca numa conta.
-         */
         createChannels()
     }
 
@@ -62,7 +58,6 @@ class Caixa6App : Application() {
                 override fun onShowNotification(
                     notification: WebNotification
                 ) {
-
                     showAndroidNotification(
                         notification
                     )
@@ -71,7 +66,6 @@ class Caixa6App : Application() {
                 override fun onCloseNotification(
                     notification: WebNotification
                 ) {
-
                     notification.dismiss()
                 }
             }
@@ -97,17 +91,13 @@ class Caixa6App : Application() {
                 )
 
         /*
-         * Só o Gmail usa modo desktop.
-         * A ideia é eliminar o aviso
-         * "Gmail funciona melhor na app".
+         * Todas as contas usam modo móvel.
+         * Isto mantém Gmail e SAPO num tamanho
+         * adequado ao ecrã do telemóvel.
          */
-        if (account.id == "rita_gmail") {
-
-            builder.userAgentMode(
-                GeckoSessionSettings
-                    .USER_AGENT_MODE_DESKTOP
-            )
-        }
+        builder.userAgentMode(
+            GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+        )
 
         val sessionSettings =
             builder.build()
@@ -168,10 +158,6 @@ class Caixa6App : Application() {
         return session
     }
 
-    /*
-     * O serviço chama esta função
-     * periodicamente.
-     */
     fun keepSessionsActive() {
 
         sessions.values.forEach { session ->
@@ -181,11 +167,6 @@ class Caixa6App : Application() {
                 session.setActive(true)
 
             } catch (_: Exception) {
-
-                /*
-                 * Uma sessão com problema
-                 * não deve fechar a app inteira.
-                 */
             }
         }
     }
