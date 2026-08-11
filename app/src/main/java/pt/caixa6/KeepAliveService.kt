@@ -1,16 +1,16 @@
 package pt.caixa6
 
-import android.app.*
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
 
 class KeepAliveService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
-        (application as Caixa6App)
-            .ensureSessions()
 
         val intent =
             Intent(
@@ -27,40 +27,35 @@ class KeepAliveService : Service() {
                     PendingIntent.FLAG_IMMUTABLE
             )
 
-        val notification =
-            if (
-                android.os.Build.VERSION.SDK_INT >= 26
-            ) {
+        val builder =
+            if (Build.VERSION.SDK_INT >= 26) {
 
                 Notification.Builder(
                     this,
                     "keepalive"
                 )
-                    .setSmallIcon(R.drawable.ic_mail)
-                    .setContentTitle(
-                        "Central de Emails"
-                    )
-                    .setContentText(
-                        "A verificar as suas caixas de correio."
-                    )
-                    .setContentIntent(pendingIntent)
-                    .setOngoing(true)
-                    .build()
 
             } else {
 
                 Notification.Builder(this)
-                    .setSmallIcon(R.drawable.ic_mail)
-                    .setContentTitle(
-                        "Central de Emails"
-                    )
-                    .setContentText(
-                        "A verificar as suas caixas de correio."
-                    )
-                    .setContentIntent(pendingIntent)
-                    .setOngoing(true)
-                    .build()
             }
+
+        val notification =
+            builder
+                .setSmallIcon(
+                    R.drawable.ic_mail
+                )
+                .setContentTitle(
+                    "Central de Emails"
+                )
+                .setContentText(
+                    "Central de Emails ativa."
+                )
+                .setContentIntent(
+                    pendingIntent
+                )
+                .setOngoing(true)
+                .build()
 
         startForeground(
             60,
