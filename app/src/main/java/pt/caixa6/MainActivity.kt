@@ -2,68 +2,107 @@ package pt.caixa6
 
 import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.widget.*
+import android.view.View
+import android.view.WindowInsets
+import android.widget.Button
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.TextView
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
 class MainActivity : Activity() {
 
     private lateinit var app: Caixa6App
-
     private lateinit var geckoView: GeckoView
-
-    private lateinit var tabRow: LinearLayout
+    private lateinit var root: LinearLayout
 
     private var currentSession: GeckoSession? = null
 
-    private var currentAccountId: String? = null
-
-    override fun onCreate(
-        savedInstanceState: Bundle?
-    ) {
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         app = application as Caixa6App
 
-        app.ensureSessions()
-
         requestNotificationPermission()
 
-        startForegroundService(
-            Intent(
-                this,
-                KeepAliveService::class.java
-            )
-        )
+        window.statusBarColor = Color.WHITE
+        window.navigationBarColor = Color.WHITE
 
-        val root =
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(Color.WHITE)
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+
+            setOnApplyWindowInsetsListener { view, insets ->
+
+                if (Build.VERSION.SDK_INT >= 30) {
+                    val bars = insets.getInsets(
+                        WindowInsets.Type.statusBars() or
+                            WindowInsets.Type.navigationBars()
+                    )
+
+                    view.setPadding(
+                        0,
+                        bars.top,
+                        0,
+                        bars.bottom
+                    )
+                }
+
+                insets
+            }
+        }
+
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+
+        val tabRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(8, 8, 8, 8)
+        }
+
+        DEFAULT_ACCOUNTS.forEach { account ->
+
+            val button = Button(this).apply {
+                text = account.label
+                isAllCaps = false
+
+                setOnClickListener {
+                    openAccount(account)
+                }
             }
 
-        val scroll =
-            HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-            }
-
-        tabRow =
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(8, 8, 8, 8)
-            }
+            tabRow.addView(button)
+        }
 
         scroll.addView(tabRow)
+
+        val status = TextView(this).apply {
+            text = "Escolhe uma conta acima."
+            textSize = 18f
+            setPadding(24, 24, 24, 24)
+        }
 
         geckoView = GeckoView(this)
 
         root.addView(
             scroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        root.addView(
+            status,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -81,88 +120,41 @@ class MainActivity : Activity() {
 
         setContentView(root)
 
-        DEFAULT_ACCOUNTS.forEach { account ->
-
-            val button =
-                Button(this).apply {
-
-                    text = account.label
-
-                    isAllCaps = false
-
-                    setOnClickListener {
-                        showAccount(account)
-                    }
-                }
-
-            tabRow.addView(button)
-        }
-
-        val firstAccount =
-            DEFAULT_ACCOUNTS.firstOrNull {
-                it.id == app.selectedAccountId
-            } ?: DEFAULT_ACCOUNTS.first()
-
-        showAccount(firstAccount)
+        /*
+         * IMPORTANTE:
+         * não abrimos nenhuma conta automaticamente.
+         */
     }
 
-    private fun showAccount(
-        account: Account
-    ) {
+    private fun openAccount(account: Account) {
 
-        val nextSession =
-            app.sessions[account.id]
-                ?: return
+        val session = app.getOrCreateSession(account)
 
-        /*
-         * Se estamos a mudar de conta,
-         * desligamos visualmente a sessão anterior.
-         */
-        if (currentSession !== nextSession) {
+        if (currentSession !== session) {
 
-            currentSession?.let { oldSession ->
-
-                oldSession.setFocused(false)
-
-                /*
-                 * Continua ativa em background.
-                 */
-                oldSession.setActive(true)
+            currentSession?.let {
+                it.setFocused(false)
+                it.setActive(false)
             }
 
-            /*
-             * GeckoView só pode ter uma sessão
-             * associada visualmente de cada vez.
-             */
             if (geckoView.session != null) {
                 geckoView.releaseSession()
             }
 
-            geckoView.setSession(nextSession)
+            geckoView.setSession(session)
 
-            currentSession = nextSession
+            currentSession = session
         }
 
-        nextSession.setActive(true)
+        session.setActive(true)
+        session.setFocused(true)
 
-        nextSession.setFocused(true)
-
-        /*
-         * Na primeira vez que se toca nesta conta,
-         * abre o respetivo webmail.
-         *
-         * Depois disso NÃO voltamos a carregar
-         * automaticamente o endereço, para não
-         * perderes a página onde estavas.
-         */
         if (!app.loadedAccounts.contains(account.id)) {
 
-            nextSession.loadUri(account.url)
+            session.loadUri(account.url)
 
             app.loadedAccounts.add(account.id)
         }
-
-        currentAccountId = account.id
 
         app.selectedAccountId = account.id
     }
@@ -180,10 +172,6 @@ class MainActivity : Activity() {
             it.setActive(true)
             it.setFocused(true)
         }
-    }
-
-    override fun onBackPressed() {
-        super.onBackPressed()
     }
 
     private fun requestNotificationPermission() {
