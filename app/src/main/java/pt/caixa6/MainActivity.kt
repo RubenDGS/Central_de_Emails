@@ -11,7 +11,6 @@ import android.view.WindowInsets
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.TextView
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
@@ -30,23 +29,29 @@ class MainActivity : Activity() {
 
         requestNotificationPermission()
 
-        window.statusBarColor = Color.WHITE
+        window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.WHITE
 
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
 
         root = LinearLayout(this).apply {
+
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+
+            setBackgroundResource(
+                R.drawable.background_pastel
+            )
 
             setOnApplyWindowInsetsListener { view, insets ->
 
                 if (Build.VERSION.SDK_INT >= 30) {
-                    val bars = insets.getInsets(
-                        WindowInsets.Type.statusBars() or
-                            WindowInsets.Type.navigationBars()
-                    )
+
+                    val bars =
+                        insets.getInsets(
+                            WindowInsets.Type.statusBars() or
+                                WindowInsets.Type.navigationBars()
+                        )
 
                     view.setPadding(
                         0,
@@ -54,55 +59,110 @@ class MainActivity : Activity() {
                         0,
                         bars.bottom
                     )
+
+                } else {
+
+                    view.setPadding(
+                        0,
+                        insets.systemWindowInsetTop,
+                        0,
+                        insets.systemWindowInsetBottom
+                    )
                 }
 
                 insets
             }
         }
 
-        val scroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
+        val scroll =
+            HorizontalScrollView(this).apply {
 
-        val tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(8, 8, 8, 8)
-        }
+                isHorizontalScrollBarEnabled = false
+
+                setBackgroundColor(
+                    Color.argb(
+                        120,
+                        255,
+                        255,
+                        255
+                    )
+                )
+            }
+
+        val tabRow =
+            LinearLayout(this).apply {
+
+                orientation =
+                    LinearLayout.HORIZONTAL
+
+                setPadding(
+                    dp(6),
+                    dp(6),
+                    dp(6),
+                    dp(6)
+                )
+            }
 
         DEFAULT_ACCOUNTS.forEach { account ->
 
-            val button = Button(this).apply {
-                text = account.label
-                isAllCaps = false
+            val button =
+                Button(this).apply {
 
-                setOnClickListener {
-                    openAccount(account)
+                    text = account.label
+
+                    isAllCaps = false
+
+                    textSize = 14f
+
+                    minHeight = 0
+                    minimumHeight = 0
+
+                    setPadding(
+                        dp(14),
+                        dp(7),
+                        dp(14),
+                        dp(7)
+                    )
+
+                    setOnClickListener {
+                        openAccount(account)
+                    }
                 }
-            }
 
-            tabRow.addView(button)
+            val params =
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+
+                    setMargins(
+                        dp(3),
+                        0,
+                        dp(3),
+                        0
+                    )
+                }
+
+            tabRow.addView(
+                button,
+                params
+            )
         }
 
         scroll.addView(tabRow)
 
-        val status = TextView(this).apply {
-            text = "Escolhe uma conta acima."
-            textSize = 18f
-            setPadding(24, 24, 24, 24)
-        }
+        geckoView =
+            GeckoView(this).apply {
 
-        geckoView = GeckoView(this)
+                /*
+                 * No início mostramos apenas
+                 * o fundo pastel.
+                 */
+                visibility = View.GONE
+            }
 
         root.addView(
             scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        root.addView(
-            status,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -119,57 +179,86 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
-
-        /*
-         * IMPORTANTE:
-         * não abrimos nenhuma conta automaticamente.
-         */
     }
 
-    private fun openAccount(account: Account) {
+    private fun openAccount(
+        account: Account
+    ) {
 
-        val session = app.getOrCreateSession(account)
+        /*
+         * Ao escolher uma conta,
+         * mostramos o browser.
+         */
+        geckoView.visibility =
+            View.VISIBLE
+
+        val session =
+            app.getOrCreateSession(
+                account
+            )
 
         if (currentSession !== session) {
 
             currentSession?.let {
+
                 it.setFocused(false)
+
                 it.setActive(false)
             }
 
-            if (geckoView.session != null) {
+            if (
+                geckoView.session != null
+            ) {
+
                 geckoView.releaseSession()
             }
 
-            geckoView.setSession(session)
+            geckoView.setSession(
+                session
+            )
 
-            currentSession = session
+            currentSession =
+                session
         }
 
         session.setActive(true)
+
         session.setFocused(true)
 
-        if (!app.loadedAccounts.contains(account.id)) {
+        if (
+            !app.loadedAccounts.contains(
+                account.id
+            )
+        ) {
 
-            session.loadUri(account.url)
+            session.loadUri(
+                account.url
+            )
 
-            app.loadedAccounts.add(account.id)
+            app.loadedAccounts.add(
+                account.id
+            )
         }
 
-        app.selectedAccountId = account.id
+        app.selectedAccountId =
+            account.id
     }
 
     override fun onPause() {
         super.onPause()
 
-        currentSession?.setFocused(false)
+        currentSession?.setFocused(
+            false
+        )
     }
 
     override fun onResume() {
         super.onResume()
 
         currentSession?.let {
+
             it.setActive(true)
+
             it.setFocused(true)
         }
     }
@@ -190,5 +279,15 @@ class MainActivity : Activity() {
                 100
             )
         }
+    }
+
+    private fun dp(
+        value: Int
+    ): Int {
+
+        return (
+            value *
+                resources.displayMetrics.density
+            ).toInt()
     }
 }
