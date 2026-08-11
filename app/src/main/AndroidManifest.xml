@@ -10,7 +10,7 @@
         android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".Caixa6App"
@@ -40,7 +40,13 @@
         <service
             android:name=".KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Mantém sessões de webmail abertas para permitir notificações de novos emails solicitadas pelo utilizador." />
+
+        </service>
 
     </application>
 
