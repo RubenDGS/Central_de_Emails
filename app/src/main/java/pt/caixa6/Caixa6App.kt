@@ -1,9 +1,19 @@
 package pt.caixa6
 
-import android.app.*
-import android.content.*
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.os.Build
-import org.mozilla.geckoview.*
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.WebNotification
+import org.mozilla.geckoview.WebNotificationDelegate
 
 class Caixa6App : Application() {
 
@@ -43,65 +53,56 @@ class Caixa6App : Application() {
                 }
             }
         )
-
-        ensureSessions()
     }
 
-    fun ensureSessions() {
+    fun getOrCreateSession(account: Account): GeckoSession {
 
-        if (sessions.isNotEmpty()) {
-            return
+        sessions[account.id]?.let {
+            return it
         }
 
-        DEFAULT_ACCOUNTS.forEach { account ->
+        val sessionSettings =
+            GeckoSessionSettings.Builder()
+                .contextId("central-emails-${account.id}")
+                .build()
 
-            val sessionSettings =
-                GeckoSessionSettings.Builder()
-                    .contextId("central-emails-${account.id}")
-                    .build()
+        val session = GeckoSession(sessionSettings)
 
-            val session = GeckoSession(sessionSettings)
+        session.setContentDelegate(
+            object : GeckoSession.ContentDelegate {}
+        )
 
-            session.setContentDelegate(
-                object : GeckoSession.ContentDelegate {}
-            )
+        session.setPermissionDelegate(
+            object : GeckoSession.PermissionDelegate {
 
-            session.setPermissionDelegate(
-                object : GeckoSession.PermissionDelegate {
+                override fun onContentPermissionRequest(
+                    session: GeckoSession,
+                    perm: GeckoSession.PermissionDelegate.ContentPermission
+                ): GeckoResult<Int> {
 
-                    override fun onContentPermissionRequest(
-                        session: GeckoSession,
-                        perm: GeckoSession.PermissionDelegate.ContentPermission
-                    ): GeckoResult<Int> {
+                    val allow =
+                        perm.permission ==
+                            GeckoSession.PermissionDelegate
+                                .PERMISSION_DESKTOP_NOTIFICATION
 
-                        val allow =
-                            perm.permission ==
-                                GeckoSession.PermissionDelegate
-                                    .PERMISSION_DESKTOP_NOTIFICATION
-
-                        return GeckoResult.fromValue(
-                            if (allow) {
-                                GeckoSession.PermissionDelegate
-                                    .ContentPermission.VALUE_ALLOW
-                            } else {
-                                GeckoSession.PermissionDelegate
-                                    .ContentPermission.VALUE_DENY
-                            }
-                        )
-                    }
+                    return GeckoResult.fromValue(
+                        if (allow) {
+                            GeckoSession.PermissionDelegate
+                                .ContentPermission.VALUE_ALLOW
+                        } else {
+                            GeckoSession.PermissionDelegate
+                                .ContentPermission.VALUE_DENY
+                        }
+                    )
                 }
-            )
+            }
+        )
 
-            session.open(runtime)
+        session.open(runtime)
 
-            /*
-             * Mantemos as sessões ativas depois de abertas.
-             * Cada conta tem cookies e armazenamento separados.
-             */
-            session.setActive(true)
+        sessions[account.id] = session
 
-            sessions[account.id] = session
-        }
+        return session
     }
 
     private fun showAndroidNotification(
@@ -159,7 +160,7 @@ class Caixa6App : Application() {
                 notification.tag +
                     title +
                     text
-                ).hashCode(),
+            ).hashCode(),
             androidNotification
         )
     }
