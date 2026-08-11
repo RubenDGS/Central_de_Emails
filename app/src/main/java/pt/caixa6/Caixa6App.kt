@@ -10,7 +10,7 @@ class Caixa6App : Application() {
         private set
 
     val sessions = linkedMapOf<String, GeckoSession>()
-    var selectedAccountId: String = "sapo1"
+    var selectedAccountId: String = "Rita Sapo"
 
     override fun onCreate() {
         super.onCreate()
