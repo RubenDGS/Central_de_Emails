@@ -14,37 +14,49 @@ import org.mozilla.geckoview.GeckoView
 class MainActivity : Activity() {
 
     private lateinit var app: Caixa6App
+
     private lateinit var geckoView: GeckoView
+
     private lateinit var tabRow: LinearLayout
 
     private var currentSession: GeckoSession? = null
+
     private var currentAccountId: String? = null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
         super.onCreate(savedInstanceState)
 
         app = application as Caixa6App
+
         app.ensureSessions()
 
         requestNotificationPermission()
 
         startForegroundService(
-            Intent(this, KeepAliveService::class.java)
+            Intent(
+                this,
+                KeepAliveService::class.java
+            )
         )
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-        }
+        val root =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.WHITE)
+            }
 
-        val scroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
+        val scroll =
+            HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+            }
 
-        tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(8, 8, 8, 8)
-        }
+        tabRow =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(8, 8, 8, 8)
+            }
 
         scroll.addView(tabRow)
 
@@ -71,67 +83,102 @@ class MainActivity : Activity() {
 
         DEFAULT_ACCOUNTS.forEach { account ->
 
-            val button = Button(this).apply {
-                text = account.label
-                isAllCaps = false
+            val button =
+                Button(this).apply {
 
-                setOnClickListener {
-                    showAccount(account)
+                    text = account.label
+
+                    isAllCaps = false
+
+                    setOnClickListener {
+                        showAccount(account)
+                    }
                 }
-            }
 
             tabRow.addView(button)
         }
 
-        showAccount(DEFAULT_ACCOUNTS.first())
+        val firstAccount =
+            DEFAULT_ACCOUNTS.firstOrNull {
+                it.id == app.selectedAccountId
+            } ?: DEFAULT_ACCOUNTS.first()
+
+        showAccount(firstAccount)
     }
 
-    private fun showAccount(account: Account) {
+    private fun showAccount(
+        account: Account
+    ) {
 
-        val next = app.sessions[account.id] ?: return
+        val nextSession =
+            app.sessions[account.id]
+                ?: return
 
-        if (currentSession !== next) {
+        /*
+         * Se estamos a mudar de conta,
+         * desligamos visualmente a sessão anterior.
+         */
+        if (currentSession !== nextSession) {
 
-            currentSession?.apply {
-                setFocused(false)
-                setActive(true)
+            currentSession?.let { oldSession ->
+
+                oldSession.setFocused(false)
+
+                /*
+                 * Continua ativa em background.
+                 */
+                oldSession.setActive(true)
             }
 
+            /*
+             * GeckoView só pode ter uma sessão
+             * associada visualmente de cada vez.
+             */
             if (geckoView.session != null) {
                 geckoView.releaseSession()
             }
 
-            geckoView.setSession(next)
+            geckoView.setSession(nextSession)
 
-            currentSession = next
+            currentSession = nextSession
         }
 
-        next.setActive(true)
-        next.setFocused(true)
+        nextSession.setActive(true)
+
+        nextSession.setFocused(true)
 
         /*
-         * Forçamos a abertura da página quando mudamos de conta.
-         * Os cookies continuam separados para cada conta.
+         * Na primeira vez que se toca nesta conta,
+         * abre o respetivo webmail.
+         *
+         * Depois disso NÃO voltamos a carregar
+         * automaticamente o endereço, para não
+         * perderes a página onde estavas.
          */
-        if (currentAccountId != account.id) {
-            next.loadUri(account.url)
+        if (!app.loadedAccounts.contains(account.id)) {
+
+            nextSession.loadUri(account.url)
+
+            app.loadedAccounts.add(account.id)
         }
 
         currentAccountId = account.id
+
         app.selectedAccountId = account.id
     }
 
     override fun onPause() {
         super.onPause()
+
         currentSession?.setFocused(false)
     }
 
     override fun onResume() {
         super.onResume()
 
-        currentSession?.apply {
-            setActive(true)
-            setFocused(true)
+        currentSession?.let {
+            it.setActive(true)
+            it.setFocused(true)
         }
     }
 
@@ -149,7 +196,9 @@ class MainActivity : Activity() {
         ) {
 
             requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                arrayOf(
+                    Manifest.permission.POST_NOTIFICATIONS
+                ),
                 100
             )
         }
