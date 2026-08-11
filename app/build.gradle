@@ -13,10 +13,6 @@ android {
         targetSdk 35
         versionCode 2
         versionName "0.2"
-
-        ndk {
-            abiFilters "arm64-v8a"
-        }
     }
 
     signingConfigs {
@@ -31,9 +27,8 @@ android {
     buildTypes {
         release {
             signingConfig signingConfigs.release
-            minifyEnabled true
-            shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            minifyEnabled false
+            shrinkResources false
         }
     }
 
@@ -54,5 +49,5 @@ android {
 }
 
 dependencies {
-    implementation "org.mozilla.geckoview:geckoview-beta:137.0.20250314092052"
+    implementation "org.mozilla.geckoview:geckoview-beta-arm64-v8a:137.0.20250314092052"
 }
