@@ -20,18 +20,14 @@ class Caixa6App : Application() {
 
     private var runtime: GeckoRuntime? = null
 
-    val sessions =
-        linkedMapOf<String, GeckoSession>()
+    val sessions = linkedMapOf<String, GeckoSession>()
 
-    val loadedAccounts =
-        mutableSetOf<String>()
+    val loadedAccounts = mutableSetOf<String>()
 
-    var selectedAccountId: String =
-        "rita_sapo"
+    var selectedAccountId: String = "rita_sapo"
 
     override fun onCreate() {
         super.onCreate()
-
         createChannels()
     }
 
@@ -41,16 +37,14 @@ class Caixa6App : Application() {
             return it
         }
 
-        val settings =
-            GeckoRuntimeSettings.Builder()
-                .javaScriptEnabled(true)
-                .build()
+        val settings = GeckoRuntimeSettings.Builder()
+            .javaScriptEnabled(true)
+            .build()
 
-        val newRuntime =
-            GeckoRuntime.create(
-                this,
-                settings
-            )
+        val newRuntime = GeckoRuntime.create(
+            this,
+            settings
+        )
 
         newRuntime.setWebNotificationDelegate(
             object : WebNotificationDelegate {
@@ -58,9 +52,7 @@ class Caixa6App : Application() {
                 override fun onShowNotification(
                     notification: WebNotification
                 ) {
-                    showAndroidNotification(
-                        notification
-                    )
+                    showAndroidNotification(notification)
                 }
 
                 override fun onCloseNotification(
@@ -84,43 +76,28 @@ class Caixa6App : Application() {
             return it
         }
 
-        val builder =
+        val sessionSettings =
             GeckoSessionSettings.Builder()
                 .contextId(
                     "central-emails-${account.id}"
                 )
+                .userAgentMode(
+                    GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+                )
+                .build()
 
-        /*
-         * Todas as contas usam modo móvel.
-         * Isto mantém Gmail e SAPO num tamanho
-         * adequado ao ecrã do telemóvel.
-         */
-        builder.userAgentMode(
-            GeckoSessionSettings.USER_AGENT_MODE_MOBILE
-        )
-
-        val sessionSettings =
-            builder.build()
-
-        val session =
-            GeckoSession(
-                sessionSettings
-            )
+        val session = GeckoSession(sessionSettings)
 
         session.setContentDelegate(
-            object :
-                GeckoSession.ContentDelegate {}
+            object : GeckoSession.ContentDelegate {}
         )
 
         session.setPermissionDelegate(
-            object :
-                GeckoSession.PermissionDelegate {
+            object : GeckoSession.PermissionDelegate {
 
                 override fun onContentPermissionRequest(
                     session: GeckoSession,
-                    perm:
-                        GeckoSession.PermissionDelegate
-                            .ContentPermission
+                    perm: GeckoSession.PermissionDelegate.ContentPermission
                 ): GeckoResult<Int> {
 
                     val allow =
@@ -130,30 +107,21 @@ class Caixa6App : Application() {
 
                     return GeckoResult.fromValue(
                         if (allow) {
-
                             GeckoSession.PermissionDelegate
-                                .ContentPermission
-                                .VALUE_ALLOW
-
+                                .ContentPermission.VALUE_ALLOW
                         } else {
-
                             GeckoSession.PermissionDelegate
-                                .ContentPermission
-                                .VALUE_DENY
+                                .ContentPermission.VALUE_DENY
                         }
                     )
                 }
             }
         )
 
-        session.open(
-            getRuntime()
-        )
-
+        session.open(getRuntime())
         session.setActive(true)
 
-        sessions[account.id] =
-            session
+        sessions[account.id] = session
 
         return session
     }
@@ -163,9 +131,7 @@ class Caixa6App : Application() {
         sessions.values.forEach { session ->
 
             try {
-
                 session.setActive(true)
-
             } catch (_: Exception) {
             }
         }
@@ -201,43 +167,29 @@ class Caixa6App : Application() {
             )
 
         val title =
-            notification.title
-                ?: "Novo email"
+            notification.title ?: "Novo email"
 
         val text =
-            notification.text
-                ?: "Recebeste uma nova mensagem."
+            notification.text ?: "Recebeste uma nova mensagem."
 
         val builder =
             if (Build.VERSION.SDK_INT >= 26) {
-
-                Notification.Builder(
-                    this,
-                    "mail"
-                )
-
+                Notification.Builder(this, "mail")
             } else {
-
                 Notification.Builder(this)
             }
 
         val androidNotification =
             builder
-                .setSmallIcon(
-                    R.drawable.ic_mail
-                )
+                .setSmallIcon(R.drawable.ic_mail)
                 .setContentTitle(title)
                 .setContentText(text)
-                .setSubText(
-                    "Central de Emails"
-                )
+                .setSubText("Central de Emails")
                 .setStyle(
                     Notification.BigTextStyle()
                         .bigText(text)
                 )
-                .setContentIntent(
-                    pendingIntent
-                )
+                .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .build()
 
@@ -264,33 +216,23 @@ class Caixa6App : Application() {
                 NotificationChannel(
                     "mail",
                     "Central de Emails",
-                    NotificationManager
-                        .IMPORTANCE_HIGH
+                    NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-
-                    description =
-                        "Novos emails"
+                    description = "Novos emails"
                 }
 
             val serviceChannel =
                 NotificationChannel(
                     "keepalive",
                     "Central de Emails ativa",
-                    NotificationManager
-                        .IMPORTANCE_LOW
+                    NotificationManager.IMPORTANCE_LOW
                 ).apply {
-
                     description =
                         "Mantém as caixas de correio ativas"
                 }
 
-            manager.createNotificationChannel(
-                mailChannel
-            )
-
-            manager.createNotificationChannel(
-                serviceChannel
-            )
+            manager.createNotificationChannel(mailChannel)
+            manager.createNotificationChannel(serviceChannel)
         }
     }
 }
