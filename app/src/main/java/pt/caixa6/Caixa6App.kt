@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
@@ -20,22 +21,30 @@ class Caixa6App : Application() {
     lateinit var runtime: GeckoRuntime
         private set
 
-    val sessions = linkedMapOf<String, GeckoSession>()
+    val sessions =
+        linkedMapOf<String, GeckoSession>()
 
-    val loadedAccounts = mutableSetOf<String>()
+    val loadedAccounts =
+        mutableSetOf<String>()
 
-    var selectedAccountId: String = "rita_sapo"
+    var selectedAccountId =
+        "rita_sapo"
 
     override fun onCreate() {
         super.onCreate()
 
         createChannels()
 
-        val settings = GeckoRuntimeSettings.Builder()
-            .javaScriptEnabled(true)
-            .build()
+        val runtimeSettings =
+            GeckoRuntimeSettings.Builder()
+                .javaScriptEnabled(true)
+                .build()
 
-        runtime = GeckoRuntime.create(this, settings)
+        runtime =
+            GeckoRuntime.create(
+                this,
+                runtimeSettings
+            )
 
         runtime.setWebNotificationDelegate(
             object : WebNotificationDelegate {
@@ -43,7 +52,9 @@ class Caixa6App : Application() {
                 override fun onShowNotification(
                     notification: WebNotification
                 ) {
-                    showAndroidNotification(notification)
+                    showAndroidNotification(
+                        notification
+                    )
                 }
 
                 override fun onCloseNotification(
@@ -55,7 +66,9 @@ class Caixa6App : Application() {
         )
     }
 
-    fun getOrCreateSession(account: Account): GeckoSession {
+    fun getOrCreateSession(
+        account: Account
+    ): GeckoSession {
 
         sessions[account.id]?.let {
             return it
@@ -63,35 +76,44 @@ class Caixa6App : Application() {
 
         val sessionSettings =
             GeckoSessionSettings.Builder()
-                .contextId("central-emails-${account.id}")
+                .contextId(
+                    "central-emails-${account.id}"
+                )
                 .build()
 
-        val session = GeckoSession(sessionSettings)
+        val session =
+            GeckoSession(sessionSettings)
 
         session.setContentDelegate(
-            object : GeckoSession.ContentDelegate {}
+            object :
+                GeckoSession.ContentDelegate {}
         )
 
         session.setPermissionDelegate(
-            object : GeckoSession.PermissionDelegate {
+            object :
+                GeckoSession.PermissionDelegate {
 
                 override fun onContentPermissionRequest(
                     session: GeckoSession,
-                    perm: GeckoSession.PermissionDelegate.ContentPermission
+                    perm:
+                        GeckoSession.PermissionDelegate
+                            .ContentPermission
                 ): GeckoResult<Int> {
 
-                    val allow =
+                    val isNotification =
                         perm.permission ==
                             GeckoSession.PermissionDelegate
                                 .PERMISSION_DESKTOP_NOTIFICATION
 
                     return GeckoResult.fromValue(
-                        if (allow) {
+                        if (isNotification) {
                             GeckoSession.PermissionDelegate
-                                .ContentPermission.VALUE_ALLOW
+                                .ContentPermission
+                                .VALUE_ALLOW
                         } else {
                             GeckoSession.PermissionDelegate
-                                .ContentPermission.VALUE_DENY
+                                .ContentPermission
+                                .VALUE_DENY
                         }
                     )
                 }
@@ -100,7 +122,8 @@ class Caixa6App : Application() {
 
         session.open(runtime)
 
-        sessions[account.id] = session
+        sessions[account.id] =
+            session
 
         return session
     }
@@ -110,10 +133,16 @@ class Caixa6App : Application() {
     ) {
 
         val manager =
-            getSystemService(NotificationManager::class.java)
+            getSystemService(
+                NotificationManager::class.java
+            )
 
         val intent =
-            Intent(this, MainActivity::class.java).apply {
+            Intent(
+                this,
+                MainActivity::class.java
+            ).apply {
+
                 flags =
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -129,29 +158,40 @@ class Caixa6App : Application() {
             )
 
         val title =
-            notification.title ?: "Novo email"
+            notification.title
+                ?: "Novo email"
 
         val text =
-            notification.text ?: "Recebeste uma nova mensagem."
+            notification.text
+                ?: "Recebeste uma nova mensagem."
 
         val builder =
             if (Build.VERSION.SDK_INT >= 26) {
-                Notification.Builder(this, "mail")
+                Notification.Builder(
+                    this,
+                    "mail"
+                )
             } else {
                 Notification.Builder(this)
             }
 
         val androidNotification =
             builder
-                .setSmallIcon(R.drawable.ic_mail)
+                .setSmallIcon(
+                    R.drawable.ic_mail
+                )
                 .setContentTitle(title)
                 .setContentText(text)
-                .setSubText("Central de Emails")
+                .setSubText(
+                    "Central de Emails"
+                )
                 .setStyle(
                     Notification.BigTextStyle()
                         .bigText(text)
                 )
-                .setContentIntent(pendingIntent)
+                .setContentIntent(
+                    pendingIntent
+                )
                 .setAutoCancel(true)
                 .build()
 
@@ -170,14 +210,18 @@ class Caixa6App : Application() {
         if (Build.VERSION.SDK_INT >= 26) {
 
             val manager =
-                getSystemService(NotificationManager::class.java)
+                getSystemService(
+                    NotificationManager::class.java
+                )
 
             val mailChannel =
                 NotificationChannel(
                     "mail",
                     "Central de Emails",
-                    NotificationManager.IMPORTANCE_HIGH
+                    NotificationManager
+                        .IMPORTANCE_HIGH
                 ).apply {
+
                     description =
                         "Notificações de novos emails"
                 }
@@ -186,14 +230,21 @@ class Caixa6App : Application() {
                 NotificationChannel(
                     "keepalive",
                     "Central de Emails",
-                    NotificationManager.IMPORTANCE_LOW
+                    NotificationManager
+                        .IMPORTANCE_LOW
                 ).apply {
+
                     description =
-                        "Mantém as caixas de email ativas"
+                        "Serviço da Central de Emails"
                 }
 
-            manager.createNotificationChannel(mailChannel)
-            manager.createNotificationChannel(keepAliveChannel)
+            manager.createNotificationChannel(
+                mailChannel
+            )
+
+            manager.createNotificationChannel(
+                keepAliveChannel
+            )
         }
     }
 }
