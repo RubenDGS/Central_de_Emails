@@ -11,88 +11,47 @@ import android.os.Looper
 
 class KeepAliveService : Service() {
 
-    private val handler =
-        Handler(
-            Looper.getMainLooper()
-        )
+    private val handler = Handler(Looper.getMainLooper())
 
-    private val keepAliveTask =
+    private val refreshTask =
         object : Runnable {
-
             override fun run() {
-
-                val app =
-                    application as Caixa6App
-
-                app.keepSessionsActive()
-
-                /*
-                 * Volta a confirmar as sessões
-                 * a cada minuto.
-                 */
-                handler.postDelayed(
-                    this,
-                    60_000L
-                )
+                val app = application as Caixa6App
+                app.refreshBackgroundSessions()
+                handler.postDelayed(this, 120_000L)
             }
         }
 
     override fun onCreate() {
         super.onCreate()
 
-        val intent =
-            Intent(
-                this,
-                MainActivity::class.java
-            )
+        val intent = Intent(this, MainActivity::class.java)
 
-        val pendingIntent =
-            PendingIntent.getActivity(
-                this,
-                1,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                    PendingIntent.FLAG_IMMUTABLE
-            )
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                PendingIntent.FLAG_IMMUTABLE
+        )
 
         val builder =
             if (Build.VERSION.SDK_INT >= 26) {
-
-                Notification.Builder(
-                    this,
-                    "keepalive"
-                )
-
+                Notification.Builder(this, "keepalive")
             } else {
-
                 Notification.Builder(this)
             }
 
-        val notification =
-            builder
-                .setSmallIcon(
-                    R.drawable.ic_mail
-                )
-                .setContentTitle(
-                    "Central de Emails"
-                )
-                .setContentText(
-                    "A verificar novos emails."
-                )
-                .setContentIntent(
-                    pendingIntent
-                )
-                .setOngoing(true)
-                .build()
+        val notification = builder
+            .setSmallIcon(R.drawable.ic_mail)
+            .setContentTitle("Central de Emails")
+            .setContentText("A verificar novos emails.")
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
 
-        startForeground(
-            60,
-            notification
-        )
-
-        handler.post(
-            keepAliveTask
-        )
+        startForeground(60, notification)
+        handler.postDelayed(refreshTask, 30_000L)
     }
 
     override fun onStartCommand(
@@ -100,23 +59,13 @@ class KeepAliveService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
         return START_STICKY
     }
 
     override fun onDestroy() {
-
-        handler.removeCallbacks(
-            keepAliveTask
-        )
-
+        handler.removeCallbacks(refreshTask)
         super.onDestroy()
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? {
-
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 }

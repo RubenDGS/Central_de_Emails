@@ -16,7 +16,9 @@ import org.mozilla.geckoview.WebNotification
 import org.mozilla.geckoview.WebNotificationDelegate
 
 class Caixa6App : Application() {
+
     private var runtime: GeckoRuntime? = null
+
     val sessions = linkedMapOf<String, GeckoSession>()
     val loadedAccounts = mutableSetOf<String>()
     var selectedAccountId: String = "rita_sapo"
@@ -47,11 +49,6 @@ class Caixa6App : Application() {
             }
         )
 
-        newRuntime.webExtensionController.ensureBuiltIn(
-            "resource://android/assets/gmail-cleaner/",
-            "gmail-cleaner@central-emails.local"
-        )
-
         runtime = newRuntime
         return newRuntime
     }
@@ -65,7 +62,6 @@ class Caixa6App : Application() {
             .build()
 
         val session = GeckoSession(sessionSettings)
-
         session.setContentDelegate(object : GeckoSession.ContentDelegate {})
 
         session.setPermissionDelegate(
@@ -90,16 +86,20 @@ class Caixa6App : Application() {
         )
 
         session.open(getRuntime())
-        session.setActive(true)
         sessions[account.id] = session
         return session
     }
 
-    fun keepSessionsActive() {
-        sessions.values.forEach { session ->
+    fun refreshBackgroundSessions() {
+        sessions.forEach { (id, session) ->
+            if (id == selectedAccountId) return@forEach
+
             try {
                 session.setActive(true)
-            } catch (_: Exception) {}
+                session.reload()
+                session.setActive(false)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -107,14 +107,17 @@ class Caixa6App : Application() {
         val manager = getSystemService(NotificationManager::class.java)
 
         val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            flags =
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
 
         val pendingIntent = PendingIntent.getActivity(
             this,
             notification.tag.hashCode(),
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                PendingIntent.FLAG_IMMUTABLE
         )
 
         val title = notification.title ?: "Novo email"
@@ -152,7 +155,9 @@ class Caixa6App : Application() {
                     "mail",
                     "Central de Emails",
                     NotificationManager.IMPORTANCE_HIGH
-                ).apply { description = "Novos emails" }
+                ).apply {
+                    description = "Novos emails"
+                }
             )
 
             manager.createNotificationChannel(
@@ -160,7 +165,9 @@ class Caixa6App : Application() {
                     "keepalive",
                     "Central de Emails ativa",
                     NotificationManager.IMPORTANCE_LOW
-                ).apply { description = "Mantém as caixas de correio ativas" }
+                ).apply {
+                    description = "Mantém as caixas de correio ativas"
+                }
             )
         }
     }
