@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "Central de Emails - SAPO Monitor",
+  "version": "1.0",
+  "applications": {
+    "gecko": {
+      "id": "sapo-monitor@central-emails.local"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "geckoViewAddons",
+    "*://mail.sapo.pt/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://mail.sapo.pt/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
