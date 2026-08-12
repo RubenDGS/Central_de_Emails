@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -14,7 +13,6 @@ import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.Toast
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
@@ -57,12 +55,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
                             WindowInsets.Type.navigationBars()
                     )
 
-                    view.setPadding(
-                        0,
-                        bars.top,
-                        0,
-                        bars.bottom
-                    )
+                    view.setPadding(0, bars.top, 0, bars.bottom)
                 } else {
                     @Suppress("DEPRECATION")
                     view.setPadding(
@@ -86,7 +79,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         DEFAULT_ACCOUNTS.forEach { account ->
             val button = Button(this).apply {
                 isAllCaps = false
-                textSize = 10.1f
+                textSize = 9.8f
                 gravity = Gravity.CENTER
                 maxLines = 2
                 includeFontPadding = false
@@ -143,36 +136,31 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         )
 
         setContentView(root)
-
         refreshAllButtons()
 
-        intent.getStringExtra("open_account")?.let { accountId ->
-            DEFAULT_ACCOUNTS
-                .firstOrNull { it.id == accountId }
-                ?.let { account ->
-                    if (account.id == "rita_gmail") {
-                        openGmail()
-                    } else {
-                        openSapo(account)
-                    }
-                }
+        intent.getStringExtra("open_account")?.let {
+            openAccountById(it)
         }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
 
-        val accountId = intent?.getStringExtra("open_account") ?: return
+        intent?.getStringExtra("open_account")?.let {
+            openAccountById(it)
+        }
+    }
 
-        DEFAULT_ACCOUNTS
-            .firstOrNull { it.id == accountId }
-            ?.let { account ->
-                if (account.id == "rita_gmail") {
-                    openGmail()
-                } else {
-                    openSapo(account)
-                }
-            }
+    private fun openAccountById(accountId: String) {
+        val account =
+            DEFAULT_ACCOUNTS.firstOrNull { it.id == accountId }
+                ?: return
+
+        if (account.id == "rita_gmail") {
+            openGmail()
+        } else {
+            openSapo(account)
+        }
     }
 
     private fun openSapo(account: Account) {
@@ -195,46 +183,30 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         }
 
         app.selectAccount(account.id)
-        app.markAccountSeen(account.id)
 
         session.setActive(true)
         session.setFocused(true)
 
-        // Sempre abre a Caixa de Entrada do SAPO.
+        // Sempre abre diretamente na Caixa de Entrada.
         session.loadUri(account.url)
-        app.loadedAccounts.add(account.id)
 
         updateSelectedButton(account.id)
     }
 
     private fun openGmail() {
         app.selectAccount("rita_gmail")
-        app.markAccountSeen("rita_gmail")
         updateSelectedButton("rita_gmail")
 
-        // O Gmail embebido ficou preto/branco após login.
-        // Mantemos o botão no topo, mas abrimos a app Gmail oficial.
-        val gmailLaunch =
-            packageManager.getLaunchIntentForPackage("com.google.android.gm")
-
-        if (gmailLaunch != null) {
-            startActivity(gmailLaunch)
-        } else {
-            try {
-                startActivity(
-                    Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse("https://mail.google.com/")
-                    )
-                )
-            } catch (_: Exception) {
-                Toast.makeText(
-                    this,
-                    "Não foi possível abrir o Gmail.",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
+        /*
+         * Gmail passa a abrir numa Activity da própria Central de Emails.
+         * Não abre Chrome nem a app Gmail.
+         */
+        startActivity(
+            Intent(
+                this,
+                GmailActivity::class.java
+            )
+        )
     }
 
     override fun onUnreadChanged(accountId: String, count: Int) {
@@ -262,7 +234,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         val second = parts.getOrElse(1) { "" }
 
         button.text =
-            if (count > 0 && accountId != "rita_gmail") {
+            if (count > 0) {
                 "$first\n$second ($count)"
             } else {
                 "$first\n$second"
@@ -290,6 +262,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
     override fun onResume() {
         super.onResume()
         app.setUiVisible(true)
+        refreshAllButtons()
 
         currentSession?.let {
             it.setActive(true)
@@ -318,12 +291,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-
-            setColor(
-                if (selected) darken(base, 0.95f)
-                else base
-            )
-
+            setColor(if (selected) darken(base, 0.95f) else base)
             cornerRadius = dp(13).toFloat()
 
             setStroke(
