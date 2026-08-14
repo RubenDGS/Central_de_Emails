@@ -23,7 +23,8 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
     private lateinit var root: LinearLayout
     private lateinit var tabRow: LinearLayout
 
-    private val accountButtons = linkedMapOf<String, Button>()
+    private val accountButtons =
+        linkedMapOf<String, Button>()
 
     private var currentSession: GeckoSession? = null
 
@@ -103,13 +104,14 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
             accountButtons[account.id] = button
 
-            val params = LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            ).apply {
-                setMargins(dp(1), 0, dp(1), 0)
-            }
+            val params =
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                ).apply {
+                    setMargins(dp(1), 0, dp(1), 0)
+                }
 
             tabRow.addView(button, params)
         }
@@ -153,8 +155,9 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
     private fun openAccountById(accountId: String) {
         val account =
-            DEFAULT_ACCOUNTS.firstOrNull { it.id == accountId }
-                ?: return
+            DEFAULT_ACCOUNTS.firstOrNull {
+                it.id == accountId
+            } ?: return
 
         if (account.id == "rita_gmail") {
             openGmail()
@@ -197,10 +200,6 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         app.selectAccount("rita_gmail")
         updateSelectedButton("rita_gmail")
 
-        /*
-         * Gmail passa a abrir numa Activity da própria Central de Emails.
-         * Não abre Chrome nem a app Gmail.
-         */
         startActivity(
             Intent(
                 this,
@@ -209,7 +208,10 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
         )
     }
 
-    override fun onUnreadChanged(accountId: String, count: Int) {
+    override fun onUnreadChanged(
+        accountId: String,
+        count: Int
+    ) {
         runOnUiThread {
             refreshButton(accountId)
         }
@@ -223,10 +225,13 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
     private fun refreshButton(accountId: String) {
         val account =
-            DEFAULT_ACCOUNTS.firstOrNull { it.id == accountId }
-                ?: return
+            DEFAULT_ACCOUNTS.firstOrNull {
+                it.id == accountId
+            } ?: return
 
-        val button = accountButtons[accountId] ?: return
+        val button =
+            accountButtons[accountId] ?: return
+
         val count = app.getUnread(accountId)
 
         val parts = account.label.split(" ", limit = 2)
@@ -249,7 +254,8 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
     private fun updateSelectedButton(selectedId: String) {
         accountButtons.keys.forEach { id ->
-            val button = accountButtons[id] ?: return@forEach
+            val button =
+                accountButtons[id] ?: return@forEach
 
             button.background =
                 createButtonBackground(
@@ -261,6 +267,7 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
     override fun onResume() {
         super.onResume()
+
         app.setUiVisible(true)
         refreshAllButtons()
 
@@ -291,7 +298,10 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(if (selected) darken(base, 0.95f) else base)
+            setColor(
+                if (selected) darken(base, 0.95f)
+                else base
+            )
             cornerRadius = dp(13).toFloat()
 
             setStroke(
@@ -304,55 +314,32 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
 
     private fun buttonColor(id: String): Int {
         return when (id) {
-            "rita_sapo" ->
-                Color.parseColor("#E6D9F7")
-
-            "rita_gmail" ->
-                Color.parseColor("#D8EBF8")
-
-            "mae_sapo" ->
-                Color.parseColor("#F5DCE7")
-
-            "pai_sapo" ->
-                Color.parseColor("#F7D7D7")
-
-            "daniela_sapo" ->
-                Color.parseColor("#F8E1CD")
-
-            "leonor_sapo" ->
-                Color.parseColor("#DCEFD8")
-
-            else ->
-                Color.parseColor("#EEEEEE")
+            "rita_sapo" -> Color.parseColor("#E6D9F7")
+            "rita_gmail" -> Color.parseColor("#D8EBF8")
+            "mae_sapo" -> Color.parseColor("#F5DCE7")
+            "pai_sapo" -> Color.parseColor("#F7D7D7")
+            "daniela_sapo" -> Color.parseColor("#F8E1CD")
+            "leonor_sapo" -> Color.parseColor("#DCEFD8")
+            else -> Color.parseColor("#EEEEEE")
         }
     }
 
     private fun buttonBorderColor(id: String): Int {
         return when (id) {
-            "rita_sapo" ->
-                Color.parseColor("#9270C5")
-
-            "rita_gmail" ->
-                Color.parseColor("#669BC2")
-
-            "mae_sapo" ->
-                Color.parseColor("#C77B9E")
-
-            "pai_sapo" ->
-                Color.parseColor("#E46F78")
-
-            "daniela_sapo" ->
-                Color.parseColor("#D89A67")
-
-            "leonor_sapo" ->
-                Color.parseColor("#7EAE72")
-
-            else ->
-                Color.parseColor("#777777")
+            "rita_sapo" -> Color.parseColor("#9270C5")
+            "rita_gmail" -> Color.parseColor("#669BC2")
+            "mae_sapo" -> Color.parseColor("#C77B9E")
+            "pai_sapo" -> Color.parseColor("#E46F78")
+            "daniela_sapo" -> Color.parseColor("#D89A67")
+            "leonor_sapo" -> Color.parseColor("#7EAE72")
+            else -> Color.parseColor("#777777")
         }
     }
 
-    private fun darken(color: Int, factor: Float): Int {
+    private fun darken(
+        color: Int,
+        factor: Float
+    ): Int {
         val r =
             (Color.red(color) * factor)
                 .toInt()
@@ -388,6 +375,5 @@ class MainActivity : Activity(), Caixa6App.UnreadListener {
     }
 
     private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density)
-            .toInt()
+        (value * resources.displayMetrics.density).toInt()
 }
