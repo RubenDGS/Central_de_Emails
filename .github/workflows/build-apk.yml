@@ -28,17 +28,6 @@ jobs:
           echo "${{ secrets.CENTRAL_KEYSTORE_B64 }}" | base64 --decode > "$RUNNER_TEMP/central-emails.jks"
           echo "CENTRAL_KEYSTORE_FILE=$RUNNER_TEMP/central-emails.jks" >> "$GITHUB_ENV"
 
-      - name: Mostrar SHA-1 da assinatura
-        env:
-          CENTRAL_KEYSTORE_PASSWORD: ${{ secrets.CENTRAL_KEYSTORE_PASSWORD }}
-          CENTRAL_KEY_ALIAS: ${{ secrets.CENTRAL_KEY_ALIAS }}
-        run: |
-          keytool -list -v \
-            -keystore "$CENTRAL_KEYSTORE_FILE" \
-            -alias "$CENTRAL_KEY_ALIAS" \
-            -storepass "$CENTRAL_KEYSTORE_PASSWORD" \
-            | grep -E "SHA1:|SHA-1:"
-
       - name: Compilar APK release assinado
         env:
           CENTRAL_KEYSTORE_PASSWORD: ${{ secrets.CENTRAL_KEYSTORE_PASSWORD }}
