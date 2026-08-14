@@ -1,122 +1,161 @@
 (() => {
-  const nativeApp = "sapoMonitor";
-  let lastSent = null;
+  const NATIVE_APP = "sapoMonitor";
+  let lastPayload = "";
 
-  function numericText(el) {
-    if (!el) return null;
-    const text = (el.textContent || "").trim();
-    return /^\d{1,5}$/.test(text) ? parseInt(text, 10) : null;
+  function asInt(value) {
+    const text = String(value == null ? "" : value).trim();
+    const match = text.match(/(?:^|\D)(\d{1,5})(?:\D|$)/);
+    return match ? parseInt(match[1], 10) : null;
   }
 
-  function unreadFromTitle() {
+  function fromTitle() {
     const title = document.title || "";
-    const m = title.match(/^\s*\((\d+)\)/);
-    return m ? parseInt(m[1], 10) : null;
+    const match = title.match(/^\s*\((\d{1,5})\)/);
+    return match ? parseInt(match[1], 10) : null;
   }
 
-  function unreadNearInbox() {
-    const all = Array.from(document.querySelectorAll("body *"));
+  function elementLooksLikeInbox(el) {
+    if (!el) return false;
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const aria = (el.getAttribute?.("aria-label") || "").trim().toLowerCase();
+    const title = (el.getAttribute?.("title") || "").trim().toLowerCase();
+    const joined = `${text} ${aria} ${title}`;
 
-    const inbox = all.find(el => {
-      const t = (el.textContent || "").trim().toLowerCase();
-      return t === "caixa de entrada" || t === "recebido" || t === "inbox";
-    });
+    return (
+      joined.includes("caixa de entrada") ||
+      joined.includes("recebido") ||
+      joined.includes("recebidos") ||
+      joined.includes("inbox")
+    );
+  }
 
-    if (!inbox) return null;
+  function candidateNumber(el) {
+    if (!el) return null;
 
-    let node = inbox;
-    for (let depth = 0; depth < 5 && node; depth++, node = node.parentElement) {
-      const candidates = Array.from(node.querySelectorAll("*"));
+    const classText = String(el.className || "").toLowerCase();
+    const aria = String(el.getAttribute?.("aria-label") || "").toLowerCase();
+    const title = String(el.getAttribute?.("title") || "").toLowerCase();
+    const id = String(el.id || "").toLowerCase();
+    const semantic = `${classText} ${aria} ${title} ${id}`;
 
-      // Primeiro, elementos que parecem badges/contadores.
-      for (const el of candidates) {
-        const cls = `${el.className || ""} ${el.getAttribute("aria-label") || ""} ${el.title || ""}`.toLowerCase();
-        if (
-          cls.includes("unread") ||
-          cls.includes("badge") ||
-          cls.includes("count") ||
-          cls.includes("não lido") ||
-          cls.includes("nao lido")
-        ) {
-          const n = numericText(el);
+    if (
+      semantic.includes("unread") ||
+      semantic.includes("não lido") ||
+      semantic.includes("nao lido") ||
+      semantic.includes("badge") ||
+      semantic.includes("counter") ||
+      semantic.includes("count")
+    ) {
+      const n = asInt(`${aria} ${title} ${el.textContent || ""}`);
+      if (n !== null) return n;
+    }
+
+    const raw = (el.textContent || "").trim();
+    return /^\d{1,5}$/.test(raw) ? parseInt(raw, 10) : null;
+  }
+
+  function fromInboxArea() {
+    const elements = Array.from(
+      document.querySelectorAll(
+        '[aria-label], [title], nav *, aside *, [role="navigation"] *, body *'
+      )
+    );
+
+    const inboxes = elements.filter(elementLooksLikeInbox).slice(0, 12);
+
+    for (const inbox of inboxes) {
+      const directText = (inbox.textContent || "").replace(/\s+/g, " ").trim();
+      const directMatch = directText.match(
+        /(?:caixa de entrada|recebidos?|inbox)\D{0,20}(\d{1,5})/i
+      );
+      if (directMatch) return parseInt(directMatch[1], 10);
+
+      let node = inbox;
+      for (let depth = 0; depth < 5 && node; depth++, node = node.parentElement) {
+        const candidates = [
+          node.previousElementSibling,
+          node.nextElementSibling,
+          ...Array.from(node.children || []),
+          ...Array.from(node.querySelectorAll?.("*") || []).slice(0, 120)
+        ];
+
+        for (const candidate of candidates) {
+          const n = candidateNumber(candidate);
           if (n !== null) return n;
         }
       }
-
-      // Depois, um número curto muito próximo do texto da Caixa de Entrada.
-      for (const el of candidates.slice(0, 80)) {
-        const n = numericText(el);
-        if (n !== null) return n;
-      }
     }
-
     return null;
   }
 
-  function unreadFromAria() {
+  function fromUnreadSemantics() {
     const selectors = [
       '[aria-label*="não lido" i]',
       '[aria-label*="nao lido" i]',
       '[aria-label*="unread" i]',
       '[title*="não lido" i]',
       '[title*="nao lido" i]',
-      '[title*="unread" i]'
+      '[title*="unread" i]',
+      '[class*="unread" i]',
+      '[class*="badge" i]',
+      '[class*="counter" i]'
     ];
 
     for (const selector of selectors) {
-      const elements = Array.from(document.querySelectorAll(selector));
-
-      for (const el of elements) {
-        const aria = `${el.getAttribute("aria-label") || ""} ${el.title || ""}`;
-        const m = aria.match(/(\d{1,5})/);
-        if (m) return parseInt(m[1], 10);
-
-        const n = numericText(el);
+      for (const el of Array.from(document.querySelectorAll(selector)).slice(0, 100)) {
+        const n = candidateNumber(el);
         if (n !== null) return n;
       }
     }
-
     return null;
   }
 
   function detectUnread() {
-    const values = [
-      unreadFromTitle(),
-      unreadNearInbox(),
-      unreadFromAria()
-    ].filter(v => Number.isInteger(v) && v >= 0);
+    const title = fromTitle();
+    if (title !== null) return title;
 
-    if (!values.length) return null;
-    return values[0];
+    const inbox = fromInboxArea();
+    if (inbox !== null) return inbox;
+
+    const semantic = fromUnreadSemantics();
+    if (semantic !== null) return semantic;
+
+    return null;
   }
 
-  function sendState() {
+  function sendState(force = false) {
     const unread = detectUnread();
-    if (unread === null || unread === lastSent) return;
-
-    lastSent = unread;
-
-    browser.runtime.sendNativeMessage(nativeApp, {
+    const payload = {
       type: "sapo_state",
       unread: unread,
       url: location.href,
-      title: document.title || ""
-    }).catch(() => {});
+      title: document.title || "",
+      ready: document.readyState
+    };
+
+    const serialized = JSON.stringify(payload);
+    if (!force && serialized === lastPayload) return;
+    lastPayload = serialized;
+
+    browser.runtime.sendNativeMessage(NATIVE_APP, payload).catch(() => {});
   }
 
-  sendState();
+  sendState(true);
 
   const observer = new MutationObserver(() => {
     clearTimeout(window.__centralEmailsTimer);
-    window.__centralEmailsTimer = setTimeout(sendState, 400);
+    window.__centralEmailsTimer = setTimeout(() => sendState(false), 350);
   });
 
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
-    attributes: true
+    attributes: true,
+    attributeFilter: ["class", "aria-label", "title"]
   });
 
-  setInterval(sendState, 5000);
+  window.addEventListener("hashchange", () => setTimeout(() => sendState(true), 500));
+  window.addEventListener("focus", () => setTimeout(() => sendState(true), 300));
+  setInterval(() => sendState(true), 10000);
 })();
