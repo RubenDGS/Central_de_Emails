@@ -3,7 +3,9 @@
   "name": "Central de Emails - SAPO Monitor",
   "version": "1.3",
   "browser_specific_settings": {
-    "gecko": { "id": "sapo-monitor@central-emails.local" }
+    "gecko": {
+      "id": "sapo-monitor@central-emails.local"
+    }
   },
   "permissions": [
     "nativeMessaging",
