@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -38,6 +39,13 @@ class MainActivity :
 
     private var currentSession:
         GeckoSession? = null
+
+    private val attachmentLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.OpenMultipleDocuments()
+        ) { uris: List<Uri> ->
+            gmailPanel.onAttachmentsSelected(uris)
+        }
 
     private val authorizationLauncher =
         registerForActivityResult(
@@ -319,10 +327,16 @@ class MainActivity :
         gmailPanel =
             GmailPanel(
                 this,
-                app
-            ) {
-                requestGmailAuthorization()
-            }.apply {
+                app,
+                requestAuthorization = {
+                    requestGmailAuthorization()
+                },
+                requestAttachments = {
+                    attachmentLauncher.launch(
+                        arrayOf("*/*")
+                    )
+                }
+            ).apply {
                 visibility =
                     View.GONE
             }

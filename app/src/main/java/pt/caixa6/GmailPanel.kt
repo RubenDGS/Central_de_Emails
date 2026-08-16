@@ -4,14 +4,20 @@ import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.text.Html
+import android.text.Spanned
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
+import android.text.style.UnderlineSpan
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -24,11 +30,13 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.util.UUID
 
 class GmailPanel(
     context: Context,
     private val app: Caixa6App,
-    private val requestAuthorization: () -> Unit
+    private val requestAuthorization: () -> Unit,
+    private val requestAttachments: () -> Unit
 ) : LinearLayout(context) {
 
     data class GmailRow(
@@ -57,14 +65,30 @@ class GmailPanel(
         val name: String
     )
 
+    data class AttachmentInfo(
+        val uri: Uri,
+        val name: String,
+        val mime: String
+    )
+
     private val status: TextView
     private val list: ListView
     private val progress: ProgressBar
     private val searchBox: EditText
+    private val selectButton: Button
+    private val bulkButton: Button
 
     private var accessToken: String? = null
     private val rows = mutableListOf<GmailRow>()
     private val userLabels = mutableListOf<UserLabel>()
+
+    private var selectionMode = false
+    private val selectedIds = linkedSetOf<String>()
+
+    private val composeAttachments =
+        mutableListOf<AttachmentInfo>()
+
+    private var activeAttachmentLabel: TextView? = null
 
     private var currentFolder =
         Folder(
@@ -75,33 +99,29 @@ class GmailPanel(
     init {
         orientation = VERTICAL
         setBackgroundColor(Color.WHITE)
-        setPadding(14, 10, 14, 10)
+        setPadding(12, 8, 12, 8)
 
-        val actions =
+        val topActions =
             LinearLayout(context).apply {
                 orientation = HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
 
-        val menu =
+        val menuButton =
             Button(context).apply {
                 text = "☰ Menu"
                 isAllCaps = false
-                setOnClickListener {
-                    showFolderMenu()
-                }
+                setOnClickListener { showFolderMenu() }
             }
 
-        val compose =
+        val composeButton =
             Button(context).apply {
                 text = "Escrever"
                 isAllCaps = false
-                setOnClickListener {
-                    showComposeDialog()
-                }
+                setOnClickListener { showComposer() }
             }
 
-        val refresh =
+        val refreshButton =
             Button(context).apply {
                 text = "Atualizar"
                 isAllCaps = false
@@ -114,32 +134,9 @@ class GmailPanel(
                 }
             }
 
-        actions.addView(
-            menu,
-            LayoutParams(
-                0,
-                LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-
-        actions.addView(
-            compose,
-            LayoutParams(
-                0,
-                LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-
-        actions.addView(
-            refresh,
-            LayoutParams(
-                0,
-                LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
+        topActions.addView(menuButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        topActions.addView(composeButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        topActions.addView(refreshButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
         val searchRow =
             LinearLayout(context).apply {
@@ -159,40 +156,48 @@ class GmailPanel(
                 isAllCaps = false
                 setOnClickListener {
                     loadCurrentFolder(
-                        searchBox.text
-                            .toString()
-                            .trim()
+                        searchBox.text.toString().trim()
                     )
                 }
             }
 
-        searchRow.addView(
-            searchBox,
-            LayoutParams(
-                0,
-                LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
+        searchRow.addView(searchBox, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        searchRow.addView(searchButton)
 
-        searchRow.addView(
-            searchButton,
-            LayoutParams(
-                LayoutParams.WRAP_CONTENT,
-                LayoutParams.WRAP_CONTENT
-            )
-        )
+        val selectionRow =
+            LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+        selectButton =
+            Button(context).apply {
+                text = "Selecionar"
+                isAllCaps = false
+                setOnClickListener {
+                    selectionMode = !selectionMode
+                    selectedIds.clear()
+                    updateSelectionControls()
+                    list.adapter?.notifyDataSetChanged()
+                }
+            }
+
+        bulkButton =
+            Button(context).apply {
+                text = "Ações (0)"
+                isAllCaps = false
+                visibility = View.GONE
+                setOnClickListener { showBulkActions() }
+            }
+
+        selectionRow.addView(selectButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        selectionRow.addView(bulkButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
         status =
             TextView(context).apply {
                 text = "Gmail"
                 textSize = 15f
-                setPadding(
-                    5,
-                    8,
-                    5,
-                    8
-                )
+                setPadding(5, 7, 5, 7)
             }
 
         progress =
@@ -200,11 +205,11 @@ class GmailPanel(
                 visibility = View.GONE
             }
 
-        list =
-            ListView(context)
+        list = ListView(context)
 
-        addView(actions)
+        addView(topActions)
         addView(searchRow)
+        addView(selectionRow)
         addView(status)
         addView(progress)
 
@@ -217,67 +222,137 @@ class GmailPanel(
             )
         )
 
-        list.setOnItemClickListener {
-                _,
-                _,
-                position,
-                _ ->
+        list.setOnItemClickListener { _, _, position, _ ->
+            val row = rows.getOrNull(position)
+                ?: return@setOnItemClickListener
 
-            rows.getOrNull(position)
-                ?.let {
-                    loadMessage(it)
-                }
+            if (selectionMode) {
+                toggleSelection(row.id)
+            } else {
+                loadMessage(row)
+            }
         }
 
-        list.setOnItemLongClickListener {
-                _,
-                _,
-                position,
-                _ ->
+        list.setOnItemLongClickListener { _, _, position, _ ->
+            val row = rows.getOrNull(position)
+                ?: return@setOnItemLongClickListener true
 
-            rows.getOrNull(position)
-                ?.let {
-                    showMessageActions(it)
-                }
+            if (!selectionMode) {
+                selectionMode = true
+                selectedIds.clear()
+            }
 
+            toggleSelection(row.id)
             true
         }
     }
 
     fun start() {
         if (accessToken == null) {
-            status.text =
-                "A ligar ao Gmail…"
-
+            status.text = "A ligar ao Gmail…"
             requestAuthorization()
-
         } else {
             loadCurrentFolder()
         }
     }
 
-    fun setAuthorizedToken(
-        token: String
-    ) {
+    fun setAuthorizedToken(token: String) {
         accessToken = token
         loadLabels()
         loadCurrentFolder()
     }
 
-    fun showAuthorizationError(
-        message: String
-    ) {
-        progress.visibility =
-            View.GONE
+    fun showAuthorizationError(message: String) {
+        progress.visibility = View.GONE
+        status.text = message
+    }
 
-        status.text =
-            message
+    fun onAttachmentsSelected(uris: List<Uri>) {
+        for (uri in uris) {
+            val name = queryDisplayName(uri)
+            val mime =
+                context.contentResolver.getType(uri)
+                    ?: "application/octet-stream"
+
+            if (composeAttachments.none { it.uri == uri }) {
+                composeAttachments.add(
+                    AttachmentInfo(
+                        uri = uri,
+                        name = name,
+                        mime = mime
+                    )
+                )
+            }
+        }
+
+        activeAttachmentLabel?.text =
+            attachmentSummary()
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        var result = "anexo"
+
+        context.contentResolver
+            .query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )
+            ?.use { cursor ->
+                if (
+                    cursor.moveToFirst() &&
+                    cursor.columnCount > 0
+                ) {
+                    result = cursor.getString(0)
+                }
+            }
+
+        return result
+    }
+
+    private fun attachmentSummary(): String =
+        if (composeAttachments.isEmpty()) {
+            "Sem anexos"
+        } else {
+            composeAttachments.joinToString(
+                separator = "\n"
+            ) {
+                "📎 ${it.name}"
+            }
+        }
+
+    private fun toggleSelection(messageId: String) {
+        if (!selectedIds.add(messageId)) {
+            selectedIds.remove(messageId)
+        }
+
+        updateSelectionControls()
+        list.adapter?.notifyDataSetChanged()
+    }
+
+    private fun updateSelectionControls() {
+        selectButton.text =
+            if (selectionMode) {
+                "Cancelar seleção"
+            } else {
+                "Selecionar"
+            }
+
+        bulkButton.visibility =
+            if (selectionMode) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+
+        bulkButton.text =
+            "Ações (${selectedIds.size})"
     }
 
     private fun loadLabels() {
-        val token =
-            accessToken
-                ?: return
+        val token = accessToken ?: return
 
         Thread {
             try {
@@ -287,38 +362,21 @@ class GmailPanel(
                         "https://gmail.googleapis.com/gmail/v1/users/me/labels"
                     )
 
-                val labels =
+                val arr =
                     JSONObject(json)
                         .optJSONArray("labels")
 
-                val loaded =
-                    mutableListOf<UserLabel>()
+                val loaded = mutableListOf<UserLabel>()
 
-                if (labels != null) {
-                    for (
-                        i in 0 until
-                            labels.length()
-                    ) {
-                        val label =
-                            labels.getJSONObject(i)
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.getJSONObject(i)
 
-                        if (
-                            label.optString(
-                                "type"
-                            ) ==
-                            "user"
-                        ) {
+                        if (item.optString("type") == "user") {
                             loaded.add(
                                 UserLabel(
-                                    id =
-                                        label.getString(
-                                            "id"
-                                        ),
-                                    name =
-                                        label.optString(
-                                            "name",
-                                            "Etiqueta"
-                                        )
+                                    id = item.getString("id"),
+                                    name = item.optString("name", "Etiqueta")
                                 )
                             )
                         }
@@ -334,40 +392,19 @@ class GmailPanel(
                     )
                 }
 
-            } catch (
-                _: Exception
-            ) {
-                /*
-                 * As etiquetas não são essenciais
-                 * para abrir a Caixa de Entrada.
-                 */
+            } catch (_: Exception) {
             }
         }.start()
     }
 
     private fun showFolderMenu() {
-        val standard =
+        val folders =
             mutableListOf(
-                Folder(
-                    "Caixa de Entrada",
-                    labelId = "INBOX"
-                ),
-                Folder(
-                    "Não lidos",
-                    query = "is:unread"
-                ),
-                Folder(
-                    "Com estrela",
-                    labelId = "STARRED"
-                ),
-                Folder(
-                    "Enviados",
-                    labelId = "SENT"
-                ),
-                Folder(
-                    "Rascunhos",
-                    labelId = "DRAFT"
-                ),
+                Folder("Caixa de Entrada", labelId = "INBOX"),
+                Folder("Não lidos", query = "is:unread"),
+                Folder("Com estrela", labelId = "STARRED"),
+                Folder("Enviados", labelId = "SENT"),
+                Folder("Rascunhos", labelId = "DRAFT"),
                 Folder(
                     "Spam",
                     labelId = "SPAM",
@@ -378,13 +415,11 @@ class GmailPanel(
                     labelId = "TRASH",
                     includeSpamTrash = true
                 ),
-                Folder(
-                    "Todo o correio"
-                )
+                Folder("Todo o correio")
             )
 
         userLabels.forEach {
-            standard.add(
+            folders.add(
                 Folder(
                     title = "Etiqueta: ${it.name}",
                     labelId = it.id
@@ -392,86 +427,46 @@ class GmailPanel(
             )
         }
 
-        val names =
-            standard
-                .map {
-                    it.title
-                }
-                .toTypedArray()
-
         AlertDialog.Builder(context)
             .setTitle("Gmail")
-            .setItems(names) {
-                    _,
-                    which ->
-
-                currentFolder =
-                    standard[which]
-
+            .setItems(
+                folders.map { it.title }.toTypedArray()
+            ) { _, which ->
+                currentFolder = folders[which]
                 searchBox.setText("")
-
+                selectionMode = false
+                selectedIds.clear()
+                updateSelectionControls()
                 loadCurrentFolder()
             }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
+            .setNegativeButton("Cancelar", null)
             .show()
     }
 
     private fun loadCurrentFolder(
         search: String = ""
     ) {
-        val token =
-            accessToken
-                ?: return
+        val token = accessToken ?: return
 
-        progress.visibility =
-            View.VISIBLE
-
-        status.text =
-            "A carregar ${currentFolder.title}…"
+        progress.visibility = View.VISIBLE
+        status.text = "A carregar ${currentFolder.title}…"
 
         Thread {
             try {
                 if (
-                    currentFolder.labelId ==
-                    "INBOX" &&
+                    currentFolder.labelId == "INBOX" &&
                     search.isBlank()
                 ) {
-                    val inboxLabel =
+                    val labelJson =
                         apiRequest(
                             token,
                             "https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX"
                         )
 
-                    val unread =
-                        JSONObject(
-                            inboxLabel
-                        )
-                            .optInt(
-                                "messagesUnread",
-                                0
-                            )
-
                     app.setGmailUnread(
-                        unread
+                        JSONObject(labelJson)
+                            .optInt("messagesUnread", 0)
                     )
-                }
-
-                val queryParts =
-                    mutableListOf<String>()
-
-                currentFolder.query
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let {
-                        queryParts.add(it)
-                    }
-
-                if (search.isNotBlank()) {
-                    queryParts.add(search)
                 }
 
                 val params =
@@ -479,70 +474,52 @@ class GmailPanel(
                         "maxResults=50"
                     )
 
-                currentFolder.labelId
-                    ?.let {
-                        params.add(
-                            "labelIds=" +
-                                URLEncoder.encode(
-                                    it,
-                                    "UTF-8"
-                                )
-                        )
-                    }
-
-                if (
-                    queryParts.isNotEmpty()
-                ) {
+                currentFolder.labelId?.let {
                     params.add(
-                        "q=" +
-                            URLEncoder.encode(
-                                queryParts.joinToString(
-                                    " "
-                                ),
-                                "UTF-8"
-                            )
+                        "labelIds=" +
+                            URLEncoder.encode(it, "UTF-8")
                     )
                 }
 
-                if (
-                    currentFolder.includeSpamTrash
-                ) {
-                    params.add(
-                        "includeSpamTrash=true"
+                val query =
+                    listOfNotNull(
+                        currentFolder.query,
+                        search.takeIf {
+                            it.isNotBlank()
+                        }
                     )
+                        .filter { it.isNotBlank() }
+                        .joinToString(" ")
+
+                if (query.isNotBlank()) {
+                    params.add(
+                        "q=" +
+                            URLEncoder.encode(query, "UTF-8")
+                    )
+                }
+
+                if (currentFolder.includeSpamTrash) {
+                    params.add("includeSpamTrash=true")
                 }
 
                 val listJson =
                     apiRequest(
                         token,
                         "https://gmail.googleapis.com/gmail/v1/users/me/messages?" +
-                            params.joinToString(
-                                "&"
-                            )
+                            params.joinToString("&")
                     )
 
                 val arr =
-                    JSONObject(
-                        listJson
-                    )
-                        .optJSONArray(
-                            "messages"
-                        )
+                    JSONObject(listJson)
+                        .optJSONArray("messages")
 
-                val newRows =
-                    mutableListOf<GmailRow>()
+                val loaded = mutableListOf<GmailRow>()
 
                 if (arr != null) {
-                    for (
-                        i in 0 until
-                            arr.length()
-                    ) {
+                    for (i in 0 until arr.length()) {
                         val id =
-                            arr
-                                .getJSONObject(i)
-                                .getString(
-                                    "id"
-                                )
+                            arr.getJSONObject(i)
+                                .getString("id")
 
                         val metadata =
                             apiRequest(
@@ -557,58 +534,34 @@ class GmailPanel(
                                     "&metadataHeaders=Message-ID"
                             )
 
-                        newRows.add(
+                        loaded.add(
                             parseMetadata(
-                                JSONObject(
-                                    metadata
-                                )
+                                JSONObject(metadata)
                             )
                         )
                     }
                 }
 
                 post {
-                    progress.visibility =
-                        View.GONE
-
+                    progress.visibility = View.GONE
                     rows.clear()
-                    rows.addAll(
-                        newRows
+                    rows.addAll(loaded)
+                    selectedIds.retainAll(
+                        rows.map { it.id }.toSet()
                     )
 
                     status.text =
-                        buildString {
-                            append(
-                                currentFolder.title
-                            )
-
-                            if (
-                                search.isNotBlank()
-                            ) {
-                                append(
-                                    " — pesquisa"
-                                )
-                            }
-
-                            append(
-                                " — ${rows.size} mensagens"
-                            )
-                        }
+                        "${currentFolder.title} — ${rows.size} mensagens"
 
                     list.adapter =
                         GmailMessageAdapter()
                 }
 
-            } catch (
-                e: Exception
-            ) {
+            } catch (e: Exception) {
                 post {
                     showAuthorizationError(
                         "Erro do Gmail: " +
-                            (
-                                e.message
-                                    ?: "erro desconhecido"
-                                )
+                            (e.message ?: "erro desconhecido")
                     )
                 }
             }
@@ -618,44 +571,26 @@ class GmailPanel(
     private fun parseMetadata(
         item: JSONObject
     ): GmailRow {
-
         val labels =
-            item.optJSONArray(
-                "labelIds"
-            )
+            item.optJSONArray("labelIds")
 
         var unread = false
         var starred = false
 
         if (labels != null) {
-            for (
-                i in 0 until
-                    labels.length()
-            ) {
-                when (
-                    labels.optString(i)
-                ) {
-                    "UNREAD" ->
-                        unread = true
-
-                    "STARRED" ->
-                        starred = true
+            for (i in 0 until labels.length()) {
+                when (labels.optString(i)) {
+                    "UNREAD" -> unread = true
+                    "STARRED" -> starred = true
                 }
             }
         }
 
         val headers =
-            item
-                .getJSONObject(
-                    "payload"
-                )
-                .optJSONArray(
-                    "headers"
-                )
+            item.getJSONObject("payload")
+                .optJSONArray("headers")
 
-        var subject =
-            "(sem assunto)"
-
+        var subject = "(sem assunto)"
         var from = ""
         var to = ""
         var cc = ""
@@ -663,19 +598,12 @@ class GmailPanel(
         var messageId = ""
 
         if (headers != null) {
-            for (
-                h in 0 until
-                    headers.length()
-            ) {
+            for (i in 0 until headers.length()) {
                 val header =
-                    headers
-                        .getJSONObject(h)
+                    headers.getJSONObject(i)
 
                 when (
-                    header
-                        .optString(
-                            "name"
-                        )
+                    header.optString("name")
                         .lowercase()
                 ) {
                     "subject" ->
@@ -687,81 +615,48 @@ class GmailPanel(
 
                     "from" ->
                         from =
-                            header.optString(
-                                "value",
-                                ""
-                            )
+                            header.optString("value", "")
 
                     "to" ->
                         to =
-                            header.optString(
-                                "value",
-                                ""
-                            )
+                            header.optString("value", "")
 
                     "cc" ->
                         cc =
-                            header.optString(
-                                "value",
-                                ""
-                            )
+                            header.optString("value", "")
 
                     "reply-to" ->
                         replyTo =
-                            header.optString(
-                                "value",
-                                ""
-                            )
+                            header.optString("value", "")
 
                     "message-id" ->
                         messageId =
-                            header.optString(
-                                "value",
-                                ""
-                            )
+                            header.optString("value", "")
                 }
             }
         }
 
         return GmailRow(
-            id =
-                item.getString(
-                    "id"
-                ),
+            id = item.getString("id"),
             threadId =
-                item.optString(
-                    "threadId",
-                    ""
-                ),
-            subject =
-                subject,
-            from =
-                from,
-            to =
-                to,
-            cc =
-                cc,
-            replyTo =
-                replyTo,
-            messageIdHeader =
-                messageId,
-            unread =
-                unread,
-            starred =
-                starred,
+                item.optString("threadId", ""),
+            subject = subject,
+            from = from,
+            to = to,
+            cc = cc,
+            replyTo = replyTo,
+            messageIdHeader = messageId,
+            unread = unread,
+            starred = starred,
             snippet =
-                item.optString(
-                    "snippet",
-                    ""
-                )
+                item.optString("snippet", "")
         )
     }
 
     private inner class GmailMessageAdapter :
         BaseAdapter() {
 
-        override fun getCount():
-            Int =
+        override fun getCount(): Int =
             rows.size
 
         override fun getItem(
@@ -779,128 +674,79 @@ class GmailPanel(
             convertView: View?,
             parent: ViewGroup?
         ): View {
+            val row = rows[position]
 
-            val row =
-                rows[position]
-
-            val holder =
-                (
-                    convertView
-                        as? LinearLayout
-                    )
-                    ?: LinearLayout(
-                        context
-                    ).apply {
-
-                        orientation =
-                            VERTICAL
-
-                        setPadding(
-                            28,
-                            15,
-                            20,
-                            15
-                        )
-
-                        addView(
-                            TextView(
-                                context
-                            ).apply {
-                                tag =
-                                    "sender"
-                                textSize =
-                                    16f
-                                setTextColor(
-                                    Color.rgb(
-                                        35,
-                                        35,
-                                        35
-                                    )
-                                )
-                            }
-                        )
-
-                        addView(
-                            TextView(
-                                context
-                            ).apply {
-                                tag =
-                                    "subject"
-                                textSize =
-                                    16f
-                                setTextColor(
-                                    Color.rgb(
-                                        35,
-                                        35,
-                                        35
-                                    )
-                                )
-                            }
-                        )
-
-                        addView(
-                            TextView(
-                                context
-                            ).apply {
-                                tag =
-                                    "snippet"
-                                textSize =
-                                    13f
-                                maxLines =
-                                    1
-                                setTextColor(
-                                    Color.rgb(
-                                        110,
-                                        110,
-                                        110
-                                    )
-                                )
-                            }
-                        )
-                    }
-
-            val sender =
-                holder.findViewWithTag<
-                    TextView
-                    >(
-                    "sender"
-                )
-
-            val subject =
-                holder.findViewWithTag<
-                    TextView
-                    >(
-                    "subject"
-                )
-
-            val snippet =
-                holder.findViewWithTag<
-                    TextView
-                    >(
-                    "snippet"
-                )
-
-            sender.text =
-                buildString {
-                    if (row.starred) {
-                        append(
-                            "★ "
-                        )
-                    }
-
-                    append(
-                        row.from
-                            .ifBlank {
-                                "(sem remetente)"
-                            }
-                    )
+            val outer =
+                LinearLayout(context).apply {
+                    orientation = HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(10, 10, 12, 10)
                 }
 
-            subject.text =
-                row.subject
+            val check =
+                CheckBox(context).apply {
+                    visibility =
+                        if (selectionMode) {
+                            View.VISIBLE
+                        } else {
+                            View.GONE
+                        }
 
-            snippet.text =
-                row.snippet
+                    isChecked =
+                        selectedIds.contains(
+                            row.id
+                        )
+
+                    setOnClickListener {
+                        toggleSelection(
+                            row.id
+                        )
+                    }
+                }
+
+            val textBox =
+                LinearLayout(context).apply {
+                    orientation = VERTICAL
+                }
+
+            val sender =
+                TextView(context).apply {
+                    textSize = 16f
+                    setTextColor(
+                        Color.rgb(35, 35, 35)
+                    )
+                    text =
+                        buildString {
+                            if (row.starred) {
+                                append("★ ")
+                            }
+
+                            append(
+                                row.from.ifBlank {
+                                    "(sem remetente)"
+                                }
+                            )
+                        }
+                }
+
+            val subject =
+                TextView(context).apply {
+                    textSize = 16f
+                    setTextColor(
+                        Color.rgb(35, 35, 35)
+                    )
+                    text = row.subject
+                }
+
+            val snippet =
+                TextView(context).apply {
+                    textSize = 13f
+                    setTextColor(
+                        Color.rgb(105, 105, 105)
+                    )
+                    maxLines = 1
+                    text = row.snippet
+                }
 
             val style =
                 if (row.unread) {
@@ -909,10 +755,6 @@ class GmailPanel(
                     Typeface.NORMAL
                 }
 
-            /*
-             * O indicador principal de "não lido"
-             * passa a ser o texto em BOLD.
-             */
             sender.setTypeface(
                 sender.typeface,
                 style
@@ -923,7 +765,21 @@ class GmailPanel(
                 style
             )
 
-            return holder
+            textBox.addView(sender)
+            textBox.addView(subject)
+            textBox.addView(snippet)
+
+            outer.addView(check)
+            outer.addView(
+                textBox,
+                LayoutParams(
+                    0,
+                    LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            )
+
+            return outer
         }
     }
 
@@ -931,14 +787,10 @@ class GmailPanel(
         original: GmailRow
     ) {
         val token =
-            accessToken
-                ?: return
+            accessToken ?: return
 
-        progress.visibility =
-            View.VISIBLE
-
-        status.text =
-            "A abrir email…"
+        progress.visibility = View.VISIBLE
+        status.text = "A abrir email…"
 
         Thread {
             try {
@@ -952,23 +804,18 @@ class GmailPanel(
                     JSONObject(json)
 
                 val row =
-                    parseMetadata(
-                        message
-                    )
-
-                val payload =
-                    message.getJSONObject(
-                        "payload"
-                    )
+                    parseMetadata(message)
 
                 val body =
                     extractBody(
-                        payload
+                        message.getJSONObject(
+                            "payload"
+                        )
                     )
                         .ifBlank {
                             message.optString(
                                 "snippet",
-                                "Sem conteúdo de texto disponível."
+                                "Sem conteúdo disponível."
                             )
                         }
 
@@ -976,51 +823,28 @@ class GmailPanel(
                     modifyLabels(
                         token,
                         row.id,
-                        add =
-                            emptyList(),
-                        remove =
-                            listOf(
-                                "UNREAD"
-                            )
+                        emptyList(),
+                        listOf("UNREAD")
                     )
                 }
 
-                val displayed =
-                    row.copy(
-                        unread =
-                            false
-                    )
-
                 post {
-                    progress.visibility =
-                        View.GONE
-
+                    progress.visibility = View.GONE
                     showMessageDialog(
-                        displayed,
+                        row.copy(unread = false),
                         body
                     )
-
                     loadCurrentFolder(
-                        searchBox
-                            .text
+                        searchBox.text
                             .toString()
                             .trim()
                     )
                 }
 
-            } catch (
-                e: Exception
-            ) {
+            } catch (e: Exception) {
                 post {
-                    progress.visibility =
-                        View.GONE
-
-                    status.text =
-                        "Erro do Gmail: " +
-                            (
-                                e.message
-                                    ?: "erro desconhecido"
-                                )
+                    progress.visibility = View.GONE
+                    toastError(e)
                 }
             }
         }.start()
@@ -1030,100 +854,46 @@ class GmailPanel(
         row: GmailRow,
         body: String
     ) {
-        val container =
-            LinearLayout(
-                context
-            ).apply {
-                orientation =
-                    VERTICAL
-                setPadding(
-                    28,
-                    12,
-                    28,
-                    8
-                )
+        val content =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+                setPadding(28, 10, 28, 10)
             }
 
         val header =
-            TextView(
-                context
-            ).apply {
-                textSize =
-                    16f
-
-                setTextIsSelectable(
-                    true
-                )
-
+            TextView(context).apply {
+                textSize = 16f
+                setTextIsSelectable(true)
                 text =
                     buildString {
-                        append(
-                            row.subject
-                        )
-                        append(
-                            "\n\nDe: "
-                        )
-                        append(
-                            row.from
-                        )
+                        append(row.subject)
+                        append("\n\nDe: ${row.from}")
 
-                        if (
-                            row.to.isNotBlank()
-                        ) {
-                            append(
-                                "\nPara: "
-                            )
-                            append(
-                                row.to
-                            )
+                        if (row.to.isNotBlank()) {
+                            append("\nPara: ${row.to}")
                         }
 
-                        if (
-                            row.cc.isNotBlank()
-                        ) {
-                            append(
-                                "\nCc: "
-                            )
-                            append(
-                                row.cc
-                            )
+                        if (row.cc.isNotBlank()) {
+                            append("\nCc: ${row.cc}")
                         }
                     }
             }
 
         val bodyView =
-            TextView(
-                context
-            ).apply {
-                text =
-                    body
-                textSize =
-                    16f
-                setTextIsSelectable(
-                    true
-                )
-                setPadding(
-                    0,
-                    18,
-                    0,
-                    18
-                )
+            TextView(context).apply {
+                textSize = 16f
+                setTextIsSelectable(true)
+                setPadding(0, 18, 0, 18)
+                text = body
             }
 
         val scroll =
-            ScrollView(
-                context
-            ).apply {
-                addView(
-                    bodyView
-                )
+            ScrollView(context).apply {
+                addView(bodyView)
             }
 
-        container.addView(
-            header
-        )
-
-        container.addView(
+        content.addView(header)
+        content.addView(
             scroll,
             LayoutParams(
                 LayoutParams.MATCH_PARENT,
@@ -1132,857 +902,747 @@ class GmailPanel(
             )
         )
 
-        AlertDialog.Builder(
-            context
-        )
-            .setTitle(
-                "Rita Gmail"
-            )
-            .setView(
-                container
-            )
-            .setPositiveButton(
-                "Responder"
-            ) {
-                    _,
-                    _ ->
-                showReplyDialog(
-                    row,
-                    false
+        AlertDialog.Builder(context)
+            .setTitle("Rita Gmail")
+            .setView(content)
+            .setPositiveButton("Responder") { _, _ ->
+                showComposer(
+                    replyRow = row,
+                    replyAll = false
                 )
             }
-            .setNeutralButton(
-                "Ações"
-            ) {
-                    _,
-                    _ ->
-                showMessageActions(
+            .setNeutralButton("Ações") { _, _ ->
+                showSingleActions(
                     row,
                     body
                 )
             }
-            .setNegativeButton(
-                "Fechar",
-                null
-            )
+            .setNegativeButton("Fechar", null)
             .show()
     }
 
-    private fun showMessageActions(
+    private fun showSingleActions(
         row: GmailRow,
-        body: String = ""
+        body: String
     ) {
-        val actions =
-            mutableListOf<String>()
-
-        actions.add(
-            if (row.unread) {
-                "Marcar como lido"
-            } else {
-                "Marcar como não lido"
-            }
-        )
-
-        actions.add(
-            if (row.starred) {
-                "Retirar estrela"
-            } else {
-                "Adicionar estrela"
-            }
-        )
-
-        actions.add(
-            "Arquivar"
-        )
-
-        actions.add(
-            "Eliminar (mover para Lixo)"
-        )
-
-        actions.add(
-            "Marcar como Spam"
-        )
-
-        actions.add(
-            "Responder"
-        )
-
-        actions.add(
-            "Responder a todos"
-        )
-
-        actions.add(
-            "Reencaminhar"
-        )
-
-        actions.add(
-            "Mover para etiqueta…"
-        )
-
-        actions.add(
-            "Aplicar etiqueta…"
-        )
-
-        AlertDialog.Builder(
-            context
-        )
-            .setTitle(
-                row.subject
+        val options =
+            arrayOf(
+                if (row.unread) {
+                    "Marcar como lido"
+                } else {
+                    "Marcar como não lido"
+                },
+                if (row.starred) {
+                    "Retirar estrela"
+                } else {
+                    "Adicionar estrela"
+                },
+                "Arquivar",
+                "Eliminar (Lixo)",
+                "Marcar como Spam",
+                "Responder",
+                "Responder a todos",
+                "Reencaminhar",
+                "Mover para etiqueta…",
+                "Aplicar etiqueta…"
             )
-            .setItems(
-                actions.toTypedArray()
-            ) {
-                    _,
-                    which ->
 
+        AlertDialog.Builder(context)
+            .setTitle(row.subject)
+            .setItems(options) { _, which ->
                 when (which) {
-
-                    0 -> {
-                        if (row.unread) {
-                            updateLabelsAndRefresh(
-                                row.id,
-                                add =
-                                    emptyList(),
-                                remove =
-                                    listOf(
-                                        "UNREAD"
-                                    )
-                            )
-                        } else {
-                            updateLabelsAndRefresh(
-                                row.id,
-                                add =
-                                    listOf(
-                                        "UNREAD"
-                                    ),
-                                remove =
+                    0 ->
+                        updateLabelsAndRefresh(
+                            listOf(row.id),
+                            add =
+                                if (row.unread) {
                                     emptyList()
-                            )
-                        }
-                    }
-
-                    1 -> {
-                        if (row.starred) {
-                            updateLabelsAndRefresh(
-                                row.id,
-                                add =
-                                    emptyList(),
-                                remove =
-                                    listOf(
-                                        "STARRED"
-                                    )
-                            )
-                        } else {
-                            updateLabelsAndRefresh(
-                                row.id,
-                                add =
-                                    listOf(
-                                        "STARRED"
-                                    ),
-                                remove =
+                                } else {
+                                    listOf("UNREAD")
+                                },
+                            remove =
+                                if (row.unread) {
+                                    listOf("UNREAD")
+                                } else {
                                     emptyList()
-                            )
-                        }
-                    }
+                                }
+                        )
+
+                    1 ->
+                        updateLabelsAndRefresh(
+                            listOf(row.id),
+                            add =
+                                if (row.starred) {
+                                    emptyList()
+                                } else {
+                                    listOf("STARRED")
+                                },
+                            remove =
+                                if (row.starred) {
+                                    listOf("STARRED")
+                                } else {
+                                    emptyList()
+                                }
+                        )
 
                     2 ->
                         updateLabelsAndRefresh(
-                            row.id,
-                            add =
-                                emptyList(),
-                            remove =
-                                listOf(
-                                    "INBOX"
-                                )
+                            listOf(row.id),
+                            emptyList(),
+                            listOf("INBOX")
                         )
 
                     3 ->
-                        trashAndRefresh(
-                            row.id
+                        trashMessages(
+                            listOf(row.id)
                         )
 
                     4 ->
                         updateLabelsAndRefresh(
-                            row.id,
-                            add =
-                                listOf(
-                                    "SPAM"
-                                ),
-                            remove =
-                                listOf(
-                                    "INBOX"
-                                )
+                            listOf(row.id),
+                            listOf("SPAM"),
+                            listOf("INBOX")
                         )
 
                     5 ->
-                        showReplyDialog(
-                            row,
-                            false
+                        showComposer(
+                            replyRow = row,
+                            replyAll = false
                         )
 
                     6 ->
-                        showReplyDialog(
-                            row,
-                            true
+                        showComposer(
+                            replyRow = row,
+                            replyAll = true
                         )
 
                     7 ->
-                        showForwardDialog(
-                            row,
-                            body
+                        showComposer(
+                            forwardRow = row,
+                            forwardedBody = body
                         )
 
                     8 ->
-                        showMoveToLabelDialog(
-                            row
+                        showLabelChooser(
+                            listOf(row.id),
+                            move = true
                         )
 
                     9 ->
-                        showApplyLabelDialog(
-                            row
+                        showLabelChooser(
+                            listOf(row.id),
+                            move = false
                         )
                 }
             }
-            .setNegativeButton(
-                "Cancelar",
-                null
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showBulkActions() {
+        val ids =
+            selectedIds.toList()
+
+        if (ids.isEmpty()) {
+            Toast.makeText(
+                context,
+                "Seleciona pelo menos um email.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val options =
+            arrayOf(
+                "Marcar como lido",
+                "Marcar como não lido",
+                "Adicionar estrela",
+                "Retirar estrela",
+                "Arquivar",
+                "Eliminar (Lixo)",
+                "Marcar como Spam",
+                "Mover para etiqueta…",
+                "Aplicar etiqueta…"
             )
+
+        AlertDialog.Builder(context)
+            .setTitle("${ids.size} emails selecionados")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            emptyList(),
+                            listOf("UNREAD")
+                        )
+
+                    1 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            listOf("UNREAD"),
+                            emptyList()
+                        )
+
+                    2 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            listOf("STARRED"),
+                            emptyList()
+                        )
+
+                    3 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            emptyList(),
+                            listOf("STARRED")
+                        )
+
+                    4 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            emptyList(),
+                            listOf("INBOX")
+                        )
+
+                    5 ->
+                        trashMessages(ids)
+
+                    6 ->
+                        updateLabelsAndRefresh(
+                            ids,
+                            listOf("SPAM"),
+                            listOf("INBOX")
+                        )
+
+                    7 ->
+                        showLabelChooser(
+                            ids,
+                            move = true
+                        )
+
+                    8 ->
+                        showLabelChooser(
+                            ids,
+                            move = false
+                        )
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showLabelChooser(
+        ids: List<String>,
+        move: Boolean
+    ) {
+        if (userLabels.isEmpty()) {
+            Toast.makeText(
+                context,
+                "Não encontrei etiquetas pessoais.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        AlertDialog.Builder(context)
+            .setTitle(
+                if (move) {
+                    "Mover para"
+                } else {
+                    "Aplicar etiqueta"
+                }
+            )
+            .setItems(
+                userLabels
+                    .map { it.name }
+                    .toTypedArray()
+            ) { _, which ->
+                val label =
+                    userLabels[which]
+
+                updateLabelsAndRefresh(
+                    ids,
+                    listOf(label.id),
+                    if (move) {
+                        listOf("INBOX")
+                    } else {
+                        emptyList()
+                    }
+                )
+            }
+            .setNegativeButton("Cancelar", null)
             .show()
     }
 
     private fun updateLabelsAndRefresh(
-        messageId: String,
+        ids: List<String>,
         add: List<String>,
         remove: List<String>
     ) {
         val token =
-            accessToken
-                ?: return
+            accessToken ?: return
 
         Thread {
             try {
-                modifyLabels(
-                    token,
-                    messageId,
-                    add,
-                    remove
-                )
-
-                post {
-                    loadCurrentFolder(
-                        searchBox
-                            .text
-                            .toString()
-                            .trim()
+                if (ids.size == 1) {
+                    modifyLabels(
+                        token,
+                        ids.first(),
+                        add,
+                        remove
+                    )
+                } else {
+                    batchModify(
+                        token,
+                        ids,
+                        add,
+                        remove
                     )
                 }
 
-            } catch (
-                e: Exception
-            ) {
                 post {
-                    toastError(
-                        e
-                    )
+                    finishSelectionAndReload()
+                }
+
+            } catch (e: Exception) {
+                post {
+                    toastError(e)
                 }
             }
         }.start()
     }
 
-    private fun trashAndRefresh(
-        messageId: String
+    private fun batchModify(
+        token: String,
+        ids: List<String>,
+        add: List<String>,
+        remove: List<String>
+    ) {
+        val json =
+            JSONObject()
+                .put("ids", JSONArray(ids))
+                .put(
+                    "addLabelIds",
+                    JSONArray(add)
+                )
+                .put(
+                    "removeLabelIds",
+                    JSONArray(remove)
+                )
+
+        apiRequest(
+            token,
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchModify",
+            "POST",
+            json.toString()
+        )
+    }
+
+    private fun trashMessages(
+        ids: List<String>
     ) {
         val token =
-            accessToken
-                ?: return
+            accessToken ?: return
 
         Thread {
             try {
-                apiRequest(
-                    token,
-                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/$messageId/trash",
-                    method =
+                for (id in ids) {
+                    apiRequest(
+                        token,
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/$id/trash",
                         "POST",
-                    body =
                         "{}"
-                )
-
-                post {
-                    loadCurrentFolder(
-                        searchBox
-                            .text
-                            .toString()
-                            .trim()
                     )
                 }
 
-            } catch (
-                e: Exception
-            ) {
                 post {
-                    toastError(
-                        e
-                    )
+                    finishSelectionAndReload()
+                }
+
+            } catch (e: Exception) {
+                post {
+                    toastError(e)
                 }
             }
         }.start()
     }
 
-    private fun showMoveToLabelDialog(
-        row: GmailRow
-    ) {
-        if (
-            userLabels.isEmpty()
-        ) {
-            Toast.makeText(
-                context,
-                "Não encontrei etiquetas pessoais.",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
+    private fun finishSelectionAndReload() {
+        selectionMode = false
+        selectedIds.clear()
+        updateSelectionControls()
 
-        val names =
-            userLabels
-                .map {
-                    it.name
-                }
-                .toTypedArray()
-
-        AlertDialog.Builder(
-            context
+        loadCurrentFolder(
+            searchBox.text
+                .toString()
+                .trim()
         )
-            .setTitle(
-                "Mover para"
-            )
-            .setItems(
-                names
-            ) {
-                    _,
-                    which ->
-
-                val label =
-                    userLabels[
-                        which
-                    ]
-
-                updateLabelsAndRefresh(
-                    row.id,
-                    add =
-                        listOf(
-                            label.id
-                        ),
-                    remove =
-                        listOf(
-                            "INBOX"
-                        )
-                )
-            }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .show()
     }
 
-    private fun showApplyLabelDialog(
-        row: GmailRow
+    private fun showComposer(
+        replyRow: GmailRow? = null,
+        replyAll: Boolean = false,
+        forwardRow: GmailRow? = null,
+        forwardedBody: String = ""
     ) {
-        if (
-            userLabels.isEmpty()
-        ) {
-            Toast.makeText(
-                context,
-                "Não encontrei etiquetas pessoais.",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val names =
-            userLabels
-                .map {
-                    it.name
-                }
-                .toTypedArray()
-
-        AlertDialog.Builder(
-            context
-        )
-            .setTitle(
-                "Aplicar etiqueta"
-            )
-            .setItems(
-                names
-            ) {
-                    _,
-                    which ->
-
-                updateLabelsAndRefresh(
-                    row.id,
-                    add =
-                        listOf(
-                            userLabels[
-                                which
-                            ].id
-                        ),
-                    remove =
-                        emptyList()
-                )
-            }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .show()
-    }
-
-    private fun showComposeDialog() {
-        if (
-            accessToken == null
-        ) {
-            Toast.makeText(
-                context,
-                "Primeiro autoriza o Gmail.",
-                Toast.LENGTH_SHORT
-            ).show()
-
+        if (accessToken == null) {
             requestAuthorization()
             return
         }
 
-        val form =
-            LinearLayout(
-                context
-            ).apply {
-                orientation =
-                    VERTICAL
-                setPadding(
-                    26,
-                    6,
-                    26,
-                    0
-                )
+        composeAttachments.clear()
+
+        val root =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+                setPadding(24, 6, 24, 0)
             }
 
         val to =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Para"
+            EditText(context).apply {
+                hint = "Para"
             }
 
         val cc =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Cc"
+            EditText(context).apply {
+                hint = "Cc"
             }
 
         val bcc =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Bcc"
+            EditText(context).apply {
+                hint = "Bcc"
             }
 
         val subject =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Assunto"
+            EditText(context).apply {
+                hint = "Assunto"
+            }
+
+        val formatRow =
+            LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
 
         val body =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Mensagem"
-                minLines =
-                    7
-                gravity =
-                    Gravity.TOP
+            EditText(context).apply {
+                hint = "Mensagem"
+                minLines = 8
+                gravity = Gravity.TOP
+                setTextIsSelectable(true)
             }
 
-        form.addView(to)
-        form.addView(cc)
-        form.addView(bcc)
-        form.addView(subject)
-        form.addView(body)
+        fun formatButton(
+            label: String,
+            action: () -> Unit
+        ): Button =
+            Button(context).apply {
+                text = label
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                setOnClickListener {
+                    action()
+                }
+            }
 
-        AlertDialog.Builder(
-            context
+        formatRow.addView(
+            formatButton("B") {
+                applySpan(
+                    body,
+                    StyleSpan(
+                        Typeface.BOLD
+                    )
+                )
+            }
         )
-            .setTitle(
-                "Novo email"
+
+        formatRow.addView(
+            formatButton("I") {
+                applySpan(
+                    body,
+                    StyleSpan(
+                        Typeface.ITALIC
+                    )
+                )
+            }
+        )
+
+        formatRow.addView(
+            formatButton("U") {
+                applySpan(
+                    body,
+                    UnderlineSpan()
+                )
+            }
+        )
+
+        formatRow.addView(
+            formatButton("A−") {
+                applySpan(
+                    body,
+                    RelativeSizeSpan(
+                        0.85f
+                    )
+                )
+            }
+        )
+
+        formatRow.addView(
+            formatButton("A+") {
+                applySpan(
+                    body,
+                    RelativeSizeSpan(
+                        1.25f
+                    )
+                )
+            }
+        )
+
+        val attachmentRow =
+            LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+        val attachButton =
+            Button(context).apply {
+                text = "📎 Anexar"
+                isAllCaps = false
+                setOnClickListener {
+                    requestAttachments()
+                }
+            }
+
+        val attachmentLabel =
+            TextView(context).apply {
+                text = "Sem anexos"
+                setPadding(10, 0, 0, 0)
+            }
+
+        activeAttachmentLabel =
+            attachmentLabel
+
+        attachmentRow.addView(attachButton)
+        attachmentRow.addView(
+            attachmentLabel,
+            LayoutParams(
+                0,
+                LayoutParams.WRAP_CONTENT,
+                1f
             )
-            .setView(
-                form
-            )
-            .setPositiveButton(
-                "Enviar"
-            ) {
-                    _,
-                    _ ->
+        )
 
-                sendMail(
-                    to =
-                        to.text
-                            .toString()
-                            .trim(),
-                    cc =
-                        cc.text
-                            .toString()
-                            .trim(),
-                    bcc =
-                        bcc.text
-                            .toString()
-                            .trim(),
-                    subject =
-                        subject.text
-                            .toString(),
-                    body =
-                        body.text
-                            .toString(),
-                    threadId =
-                        "",
-                    inReplyTo =
-                        ""
-                )
-            }
-            .setNeutralButton(
-                "Guardar rascunho"
-            ) {
-                    _,
-                    _ ->
-
-                createDraft(
-                    to =
-                        to.text
-                            .toString()
-                            .trim(),
-                    cc =
-                        cc.text
-                            .toString()
-                            .trim(),
-                    bcc =
-                        bcc.text
-                            .toString()
-                            .trim(),
-                    subject =
-                        subject.text
-                            .toString(),
-                    body =
-                        body.text
-                            .toString()
-                )
-            }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .show()
-    }
-
-    private fun showReplyDialog(
-        row: GmailRow,
-        replyAll: Boolean
-    ) {
-        val body =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    if (replyAll) {
-                        "Responder a todos"
-                    } else {
-                        "Resposta"
-                    }
-
-                minLines =
-                    7
-
-                gravity =
-                    Gravity.TOP
-
-                setPadding(
-                    28,
-                    10,
-                    28,
-                    0
-                )
-            }
-
-        val subject =
-            if (
-                row.subject.startsWith(
-                    "Re:",
-                    true
-                )
-            ) {
-                row.subject
-            } else {
-                "Re: ${row.subject}"
-            }
-
-        val mainRecipient =
-            row.replyTo
-                .ifBlank {
-                    row.from
+        if (replyRow != null) {
+            val recipient =
+                replyRow.replyTo.ifBlank {
+                    replyRow.from
                 }
 
-        val cc =
+            to.setText(recipient)
+
             if (replyAll) {
-                listOf(
-                    row.to,
-                    row.cc
-                )
-                    .filter {
-                        it.isNotBlank()
-                    }
-                    .joinToString(
-                        ", "
+                cc.setText(
+                    listOf(
+                        replyRow.to,
+                        replyRow.cc
                     )
-            } else {
-                ""
+                        .filter {
+                            it.isNotBlank()
+                        }
+                        .joinToString(", ")
+                )
             }
 
-        AlertDialog.Builder(
-            context
-        )
-            .setTitle(
-                if (replyAll) {
-                    "Responder a todos"
+            subject.setText(
+                if (
+                    replyRow.subject
+                        .startsWith(
+                            "Re:",
+                            true
+                        )
+                ) {
+                    replyRow.subject
                 } else {
-                    "Responder"
+                    "Re: ${replyRow.subject}"
                 }
             )
-            .setView(
-                body
-            )
-            .setPositiveButton(
-                "Enviar"
-            ) {
-                    _,
-                    _ ->
+        }
 
-                sendMail(
-                    to =
-                        mainRecipient,
-                    cc =
-                        cc,
-                    bcc =
-                        "",
+        if (forwardRow != null) {
+            subject.setText(
+                if (
+                    forwardRow.subject
+                        .startsWith(
+                            "Fwd:",
+                            true
+                        )
+                ) {
+                    forwardRow.subject
+                } else {
+                    "Fwd: ${forwardRow.subject}"
+                }
+            )
+
+            body.setText(
+                buildString {
+                    append("\n\n")
+                    append("---------- Mensagem reencaminhada ----------\n")
+                    append("De: ${forwardRow.from}\n")
+                    append("Assunto: ${forwardRow.subject}\n\n")
+                    append(forwardedBody)
+                }
+            )
+        }
+
+        root.addView(to)
+        root.addView(cc)
+        root.addView(bcc)
+        root.addView(subject)
+        root.addView(formatRow)
+        root.addView(attachmentRow)
+        root.addView(
+            body,
+            LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
+        val dialog =
+            AlertDialog.Builder(context)
+                .setTitle(
+                    when {
+                        forwardRow != null ->
+                            "Reencaminhar"
+
+                        replyRow != null &&
+                            replyAll ->
+                            "Responder a todos"
+
+                        replyRow != null ->
+                            "Responder"
+
+                        else ->
+                            "Novo email"
+                    }
+                )
+                .setView(root)
+                .setPositiveButton(
+                    "Enviar",
+                    null
+                )
+                .setNeutralButton(
+                    "Guardar rascunho",
+                    null
+                )
+                .setNegativeButton(
+                    "Cancelar",
+                    null
+                )
+                .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(
+                AlertDialog.BUTTON_POSITIVE
+            ).setOnClickListener {
+                sendRichMail(
+                    to = to.text.toString().trim(),
+                    cc = cc.text.toString().trim(),
+                    bcc = bcc.text.toString().trim(),
                     subject =
-                        subject,
-                    body =
-                        body.text
-                            .toString(),
+                        subject.text.toString(),
+                    body = body,
                     threadId =
-                        row.threadId,
+                        replyRow?.threadId ?: "",
                     inReplyTo =
-                        row.messageIdHeader
-                )
-            }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .show()
-    }
-
-    private fun showForwardDialog(
-        row: GmailRow,
-        originalBody: String
-    ) {
-        val form =
-            LinearLayout(
-                context
-            ).apply {
-                orientation =
-                    VERTICAL
-                setPadding(
-                    28,
-                    8,
-                    28,
-                    0
-                )
-            }
-
-        val to =
-            EditText(
-                context
-            ).apply {
-                hint =
-                    "Para"
-            }
-
-        val body =
-            EditText(
-                context
-            ).apply {
-                minLines =
-                    7
-                gravity =
-                    Gravity.TOP
-
-                setText(
-                    buildString {
-                        append(
-                            "\n\n---------- Mensagem reencaminhada ----------\n"
-                        )
-                        append(
-                            "De: ${row.from}\n"
-                        )
-                        append(
-                            "Assunto: ${row.subject}\n\n"
-                        )
-                        append(
-                            originalBody
-                        )
+                        replyRow?.messageIdHeader ?: "",
+                    asDraft = false,
+                    onSuccess = {
+                        dialog.dismiss()
                     }
                 )
             }
 
-        form.addView(to)
-        form.addView(body)
-
-        val subject =
-            if (
-                row.subject.startsWith(
-                    "Fwd:",
-                    true
-                )
-            ) {
-                row.subject
-            } else {
-                "Fwd: ${row.subject}"
-            }
-
-        AlertDialog.Builder(
-            context
-        )
-            .setTitle(
-                "Reencaminhar"
-            )
-            .setView(
-                form
-            )
-            .setPositiveButton(
-                "Enviar"
-            ) {
-                    _,
-                    _ ->
-
-                sendMail(
-                    to =
-                        to.text
-                            .toString()
-                            .trim(),
-                    cc =
-                        "",
-                    bcc =
-                        "",
+            dialog.getButton(
+                AlertDialog.BUTTON_NEUTRAL
+            ).setOnClickListener {
+                sendRichMail(
+                    to = to.text.toString().trim(),
+                    cc = cc.text.toString().trim(),
+                    bcc = bcc.text.toString().trim(),
                     subject =
-                        subject,
-                    body =
-                        body.text
-                            .toString(),
+                        subject.text.toString(),
+                    body = body,
                     threadId =
-                        "",
+                        replyRow?.threadId ?: "",
                     inReplyTo =
-                        ""
+                        replyRow?.messageIdHeader ?: "",
+                    asDraft = true,
+                    onSuccess = {
+                        dialog.dismiss()
+                    }
                 )
             }
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .show()
+        }
+
+        dialog.setOnDismissListener {
+            activeAttachmentLabel = null
+            composeAttachments.clear()
+        }
+
+        dialog.show()
     }
 
-    private fun createDraft(
-        to: String,
-        cc: String,
-        bcc: String,
-        subject: String,
-        body: String
+    private fun applySpan(
+        editor: EditText,
+        span: Any
     ) {
-        val token =
-            accessToken
-                ?: return
+        val start =
+            editor.selectionStart
 
-        val raw =
-            makeRawMessage(
-                to,
-                cc,
-                bcc,
-                subject,
-                body,
-                ""
-            )
+        val end =
+            editor.selectionEnd
 
-        val json =
-            JSONObject()
-                .put(
-                    "message",
-                    JSONObject()
-                        .put(
-                            "raw",
-                            raw
-                        )
-                )
+        if (
+            start < 0 ||
+            end <= start
+        ) {
+            Toast.makeText(
+                context,
+                "Seleciona primeiro o texto a formatar.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
 
-        Thread {
-            try {
-                apiRequest(
-                    token,
-                    "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                    method =
-                        "POST",
-                    body =
-                        json.toString()
-                )
-
-                post {
-                    Toast.makeText(
-                        context,
-                        "Rascunho guardado.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-
-            } catch (
-                e: Exception
-            ) {
-                post {
-                    toastError(
-                        e
-                    )
-                }
-            }
-        }.start()
+        editor.text.setSpan(
+            span,
+            start,
+            end,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
     }
 
-    private fun sendMail(
+    private fun sendRichMail(
         to: String,
         cc: String,
         bcc: String,
         subject: String,
-        body: String,
+        body: EditText,
         threadId: String,
-        inReplyTo: String
+        inReplyTo: String,
+        asDraft: Boolean,
+        onSuccess: () -> Unit
     ) {
         val token =
-            accessToken
-                ?: return
+            accessToken ?: return
 
-        if (to.isBlank()) {
+        if (
+            !asDraft &&
+            to.isBlank()
+        ) {
             Toast.makeText(
                 context,
                 "Indica o destinatário.",
@@ -1991,149 +1651,227 @@ class GmailPanel(
             return
         }
 
-        progress.visibility =
-            View.VISIBLE
-
-        status.text =
-            "A enviar email…"
-
-        val encoded =
-            makeRawMessage(
-                to,
-                cc,
-                bcc,
-                subject,
-                body,
-                inReplyTo
+        val html =
+            Html.toHtml(
+                body.text as Spanned,
+                Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE
             )
 
-        val json =
-            JSONObject()
-                .put(
-                    "raw",
-                    encoded
-                )
+        val plain =
+            body.text.toString()
 
-        if (
-            threadId.isNotBlank()
-        ) {
-            json.put(
-                "threadId",
-                threadId
-            )
-        }
+        val attachments =
+            composeAttachments.toList()
+
+        progress.visibility = View.VISIBLE
 
         Thread {
             try {
-                apiRequest(
-                    token,
-                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                    method =
+                val raw =
+                    buildMimeMessage(
+                        to = to,
+                        cc = cc,
+                        bcc = bcc,
+                        subject = subject,
+                        plain = plain,
+                        html = html,
+                        inReplyTo = inReplyTo,
+                        attachments = attachments
+                    )
+
+                if (asDraft) {
+                    val message =
+                        JSONObject()
+                            .put(
+                                "raw",
+                                raw
+                            )
+
+                    if (
+                        threadId.isNotBlank()
+                    ) {
+                        message.put(
+                            "threadId",
+                            threadId
+                        )
+                    }
+
+                    val json =
+                        JSONObject()
+                            .put(
+                                "message",
+                                message
+                            )
+
+                    apiRequest(
+                        token,
+                        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
                         "POST",
-                    body =
                         json.toString()
-                )
+                    )
+
+                } else {
+                    val json =
+                        JSONObject()
+                            .put(
+                                "raw",
+                                raw
+                            )
+
+                    if (
+                        threadId.isNotBlank()
+                    ) {
+                        json.put(
+                            "threadId",
+                            threadId
+                        )
+                    }
+
+                    apiRequest(
+                        token,
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                        "POST",
+                        json.toString()
+                    )
+                }
 
                 post {
-                    progress.visibility =
-                        View.GONE
+                    progress.visibility = View.GONE
 
                     Toast.makeText(
                         context,
-                        "Email enviado.",
+                        if (asDraft) {
+                            "Rascunho guardado."
+                        } else {
+                            "Email enviado."
+                        },
                         Toast.LENGTH_SHORT
                     ).show()
 
+                    onSuccess()
                     loadCurrentFolder()
                 }
 
-            } catch (
-                e: Exception
-            ) {
+            } catch (e: Exception) {
                 post {
-                    progress.visibility =
-                        View.GONE
-
-                    toastError(
-                        e
-                    )
+                    progress.visibility = View.GONE
+                    toastError(e)
                 }
             }
         }.start()
     }
 
-    private fun makeRawMessage(
+    private fun buildMimeMessage(
         to: String,
         cc: String,
         bcc: String,
         subject: String,
-        body: String,
-        inReplyTo: String
+        plain: String,
+        html: String,
+        inReplyTo: String,
+        attachments: List<AttachmentInfo>
     ): String {
+        val mixed =
+            "mixed-${UUID.randomUUID()}"
+
+        val alternative =
+            "alt-${UUID.randomUUID()}"
 
         val raw =
             buildString {
-                append(
-                    "To: $to\r\n"
-                )
-
-                if (
-                    cc.isNotBlank()
-                ) {
-                    append(
-                        "Cc: $cc\r\n"
-                    )
+                if (to.isNotBlank()) {
+                    append("To: $to\r\n")
                 }
 
-                if (
-                    bcc.isNotBlank()
-                ) {
-                    append(
-                        "Bcc: $bcc\r\n"
-                    )
+                if (cc.isNotBlank()) {
+                    append("Cc: $cc\r\n")
                 }
 
-                append(
-                    "Subject: $subject\r\n"
-                )
-
-                if (
-                    inReplyTo.isNotBlank()
-                ) {
-                    append(
-                        "In-Reply-To: $inReplyTo\r\n"
-                    )
-                    append(
-                        "References: $inReplyTo\r\n"
-                    )
+                if (bcc.isNotBlank()) {
+                    append("Bcc: $bcc\r\n")
                 }
 
+                append("Subject: $subject\r\n")
+
+                if (inReplyTo.isNotBlank()) {
+                    append("In-Reply-To: $inReplyTo\r\n")
+                    append("References: $inReplyTo\r\n")
+                }
+
+                append("MIME-Version: 1.0\r\n")
                 append(
-                    "MIME-Version: 1.0\r\n"
+                    "Content-Type: multipart/mixed; boundary=\"$mixed\"\r\n"
+                )
+                append("\r\n")
+
+                append("--$mixed\r\n")
+                append(
+                    "Content-Type: multipart/alternative; boundary=\"$alternative\"\r\n\r\n"
                 )
 
+                append("--$alternative\r\n")
                 append(
                     "Content-Type: text/plain; charset=UTF-8\r\n"
                 )
-
                 append(
-                    "\r\n"
+                    "Content-Transfer-Encoding: 8bit\r\n\r\n"
                 )
+                append(plain)
+                append("\r\n")
 
+                append("--$alternative\r\n")
                 append(
-                    body
+                    "Content-Type: text/html; charset=UTF-8\r\n"
                 )
+                append(
+                    "Content-Transfer-Encoding: 8bit\r\n\r\n"
+                )
+                append(html)
+                append("\r\n")
+                append("--$alternative--\r\n")
+
+                for (attachment in attachments) {
+                    val bytes =
+                        context.contentResolver
+                            .openInputStream(
+                                attachment.uri
+                            )
+                            ?.use {
+                                it.readBytes()
+                            }
+                            ?: ByteArray(0)
+
+                    val encoded =
+                        Base64.encodeToString(
+                            bytes,
+                            Base64.NO_WRAP
+                        )
+
+                    append("--$mixed\r\n")
+                    append(
+                        "Content-Type: ${attachment.mime}; name=\"${attachment.name}\"\r\n"
+                    )
+                    append(
+                        "Content-Disposition: attachment; filename=\"${attachment.name}\"\r\n"
+                    )
+                    append(
+                        "Content-Transfer-Encoding: base64\r\n\r\n"
+                    )
+                    append(encoded)
+                    append("\r\n")
+                }
+
+                append("--$mixed--\r\n")
             }
 
-        return Base64
-            .encodeToString(
-                raw.toByteArray(
-                    Charsets.UTF_8
-                ),
-                Base64.URL_SAFE or
-                    Base64.NO_WRAP or
-                    Base64.NO_PADDING
-            )
+        return Base64.encodeToString(
+            raw.toByteArray(
+                Charsets.UTF_8
+            ),
+            Base64.URL_SAFE or
+                Base64.NO_WRAP or
+                Base64.NO_PADDING
+        )
     }
 
     private fun modifyLabels(
@@ -2146,24 +1884,18 @@ class GmailPanel(
             JSONObject()
                 .put(
                     "addLabelIds",
-                    JSONArray(
-                        add
-                    )
+                    JSONArray(add)
                 )
                 .put(
                     "removeLabelIds",
-                    JSONArray(
-                        remove
-                    )
+                    JSONArray(remove)
                 )
 
         apiRequest(
             token,
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/$messageId/modify",
-            method =
-                "POST",
-            body =
-                json.toString()
+            "POST",
+            json.toString()
         )
     }
 
@@ -2171,20 +1903,15 @@ class GmailPanel(
         part: JSONObject
     ): String {
         val mime =
-            part.optString(
-                "mimeType"
-            )
-
-        val body =
-            part.optJSONObject(
-                "body"
-            )
+            part.optString("mimeType")
 
         val data =
-            body?.optString(
-                "data",
-                ""
-            ) ?: ""
+            part.optJSONObject("body")
+                ?.optString(
+                    "data",
+                    ""
+                )
+                ?: ""
 
         if (
             data.isNotBlank() &&
@@ -2226,37 +1953,25 @@ class GmailPanel(
         }
 
         val parts =
-            part.optJSONArray(
-                "parts"
-            )
+            part.optJSONArray("parts")
 
         if (parts != null) {
-            var fallback =
-                ""
+            var fallback = ""
 
-            for (
-                i in 0 until
-                    parts.length()
-            ) {
+            for (i in 0 until parts.length()) {
                 val child =
                     parts.getJSONObject(i)
 
-                val childMime =
-                    child.optString(
-                        "mimeType"
-                    )
-
                 val result =
-                    extractBody(
-                        child
-                    )
+                    extractBody(child)
 
                 if (
                     result.isNotBlank() &&
-                    childMime.equals(
-                        "text/plain",
-                        true
-                    )
+                    child.optString("mimeType")
+                        .equals(
+                            "text/plain",
+                            true
+                        )
                 ) {
                     return result
                 }
@@ -2265,8 +1980,7 @@ class GmailPanel(
                     result.isNotBlank() &&
                     fallback.isBlank()
                 ) {
-                    fallback =
-                        result
+                    fallback = result
                 }
             }
 
@@ -2282,14 +1996,12 @@ class GmailPanel(
         method: String = "GET",
         body: String? = null
     ): String {
-
         val connection =
             URL(url)
                 .openConnection()
                 as HttpURLConnection
 
-        connection.requestMethod =
-            method
+        connection.requestMethod = method
 
         connection.setRequestProperty(
             "Authorization",
@@ -2302,8 +2014,7 @@ class GmailPanel(
         )
 
         if (body != null) {
-            connection.doOutput =
-                true
+            connection.doOutput = true
 
             connection.setRequestProperty(
                 "Content-Type",
@@ -2324,9 +2035,7 @@ class GmailPanel(
             connection.responseCode
 
         val stream =
-            if (
-                code in 200..299
-            ) {
+            if (code in 200..299) {
                 connection.inputStream
             } else {
                 connection.errorStream
