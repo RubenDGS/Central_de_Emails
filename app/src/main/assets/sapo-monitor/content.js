@@ -1,114 +1,134 @@
 (() => {
   const NATIVE_APP = "sapoMonitor";
-  let lastPayload = "";
+  const INBOX_TOKEN = "SU5CT1g";
+  let lastSent = "__never__";
 
-  function asInt(value) {
-    const text = String(value == null ? "" : value).trim();
-    const match = text.match(/(?:^|\D)(\d{1,5})(?:\D|$)/);
-    return match ? parseInt(match[1], 10) : null;
+  function isInboxUrl() {
+    return (location.href || "").includes(`/messages/${INBOX_TOKEN}`) ||
+           (location.hash || "").includes(`/messages/${INBOX_TOKEN}`);
   }
 
-  function fromTitle() {
-    const title = document.title || "";
-    const match = title.match(/^\s*\((\d{1,5})\)/);
-    return match ? parseInt(match[1], 10) : null;
+  function normalized(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
   }
 
-  function looksLikeInbox(el) {
-    const text = (el?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-    const aria = (el?.getAttribute?.("aria-label") || "").toLowerCase();
-    const title = (el?.getAttribute?.("title") || "").toLowerCase();
-    const joined = `${text} ${aria} ${title}`;
+  function hasUnreadSemantics(el) {
+    if (!el) return false;
+
+    const text = [
+      el.className || "",
+      el.id || "",
+      el.getAttribute?.("aria-label") || "",
+      el.getAttribute?.("title") || "",
+      el.getAttribute?.("data-status") || "",
+      el.getAttribute?.("data-state") || ""
+    ].join(" ").toLowerCase();
 
     return (
-      joined.includes("caixa de entrada") ||
-      joined.includes("recebido") ||
-      joined.includes("recebidos") ||
-      joined.includes("inbox")
+      text.includes("unread") ||
+      text.includes("não lido") ||
+      text.includes("nao lido") ||
+      text.includes("por ler") ||
+      text.includes("new-message") ||
+      text.includes("is-new")
     );
   }
 
-  function candidateNumber(el) {
-    if (!el) return null;
+  function looksLikeMessageRow(el) {
+    if (!el || el === document.body || el === document.documentElement) return false;
 
-    const semantic = [
-      el.className || "",
-      el.getAttribute?.("aria-label") || "",
-      el.getAttribute?.("title") || "",
-      el.id || ""
-    ].join(" ").toLowerCase();
+    const text = normalized(el.textContent);
+    if (text.length < 3 || text.length > 1200) return false;
 
-    if (
-      semantic.includes("unread") ||
-      semantic.includes("não lido") ||
-      semantic.includes("nao lido") ||
-      semantic.includes("badge") ||
-      semantic.includes("counter") ||
-      semantic.includes("count")
-    ) {
-      const n = asInt(`${semantic} ${el.textContent || ""}`);
-      if (n !== null) return n;
-    }
+    const cls = normalized(el.className);
+    const role = normalized(el.getAttribute?.("role"));
+    const data = normalized(
+      `${el.getAttribute?.("data-message-id") || ""} ${el.getAttribute?.("data-id") || ""}`
+    );
 
-    const raw = (el.textContent || "").trim();
-    return /^\d{1,5}$/.test(raw) ? parseInt(raw, 10) : null;
+    return (
+      cls.includes("message") ||
+      cls.includes("mail") ||
+      cls.includes("row") ||
+      cls.includes("item") ||
+      role === "row" ||
+      role === "listitem" ||
+      data.length > 0
+    );
   }
 
-  function fromInboxArea() {
-    const elements = Array.from(document.querySelectorAll("body *"));
-    const inboxes = elements.filter(looksLikeInbox).slice(0, 12);
+  function nearestMessageRow(el) {
+    let node = el;
 
-    for (const inbox of inboxes) {
-      const directText = (inbox.textContent || "").replace(/\s+/g, " ").trim();
-      const directMatch = directText.match(
-        /(?:caixa de entrada|recebidos?|inbox)\D{0,20}(\d{1,5})/i
-      );
-
-      if (directMatch) return parseInt(directMatch[1], 10);
-
-      let node = inbox;
-
-      for (let depth = 0; depth < 5 && node; depth++, node = node.parentElement) {
-        const candidates = [
-          node.previousElementSibling,
-          node.nextElementSibling,
-          ...Array.from(node.children || []),
-          ...Array.from(node.querySelectorAll?.("*") || []).slice(0, 120)
-        ];
-
-        for (const candidate of candidates) {
-          const n = candidateNumber(candidate);
-          if (n !== null) return n;
-        }
-      }
+    for (let depth = 0; depth < 7 && node; depth++, node = node.parentElement) {
+      if (looksLikeMessageRow(node)) return node;
     }
 
     return null;
   }
 
-  function detectUnread() {
-    const title = fromTitle();
-    if (title !== null) return title;
+  function countUnreadRows() {
+    if (!isInboxUrl()) return null;
 
-    const inbox = fromInboxArea();
-    if (inbox !== null) return inbox;
+    const candidates = Array.from(
+      document.querySelectorAll(
+        '[class*="unread" i], [id*="unread" i], ' +
+        '[aria-label*="não lido" i], [aria-label*="nao lido" i], ' +
+        '[aria-label*="por ler" i], [aria-label*="unread" i], ' +
+        '[title*="não lido" i], [title*="nao lido" i], ' +
+        '[title*="por ler" i], [title*="unread" i], ' +
+        '[data-status*="unread" i], [data-state*="unread" i]'
+      )
+    );
+
+    const rows = new Set();
+
+    for (const candidate of candidates) {
+      if (!hasUnreadSemantics(candidate)) continue;
+
+      const row = nearestMessageRow(candidate);
+      if (row) rows.add(row);
+    }
+
+    for (const el of Array.from(document.querySelectorAll("body *"))) {
+      if (hasUnreadSemantics(el) && looksLikeMessageRow(el)) {
+        rows.add(el);
+      }
+    }
+
+    if (rows.size > 0) return rows.size;
+
+    const bodyText = normalized(document.body?.innerText);
+
+    if (
+      bodyText.includes("caixa de entrada") ||
+      bodyText.includes("sem mensagens") ||
+      bodyText.includes("nenhuma mensagem")
+    ) {
+      return 0;
+    }
 
     return null;
   }
 
   function sendState(force = false) {
-    const unread = detectUnread();
+    if (!isInboxUrl()) return;
+
+    const unread = countUnreadRows();
+    if (unread === null) return;
 
     const payload = {
       type: "sapo_state",
       unread,
+      folder: "INBOX",
       url: location.href,
       title: document.title || ""
     };
 
     const serialized = JSON.stringify(payload);
-    if (!force && serialized === lastPayload) return;
-    lastPayload = serialized;
+
+    if (!force && serialized === lastSent) return;
+    lastSent = serialized;
 
     browser.runtime.sendNativeMessage(NATIVE_APP, payload).catch(() => {});
   }
@@ -116,18 +136,29 @@
   sendState(true);
 
   const observer = new MutationObserver(() => {
-    clearTimeout(window.__centralEmailsTimer);
-    window.__centralEmailsTimer = setTimeout(() => sendState(false), 400);
+    clearTimeout(window.__centralEmailsUnreadTimer);
+    window.__centralEmailsUnreadTimer = setTimeout(() => sendState(false), 500);
   });
 
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
-    attributes: true
+    attributes: true,
+    attributeFilter: [
+      "class",
+      "id",
+      "aria-label",
+      "title",
+      "data-status",
+      "data-state"
+    ]
   });
 
-  window.addEventListener("hashchange", () => setTimeout(() => sendState(true), 500));
-  window.addEventListener("focus", () => setTimeout(() => sendState(true), 300));
+  window.addEventListener(
+    "hashchange",
+    () => setTimeout(() => sendState(true), 800)
+  );
+
   setInterval(() => sendState(true), 10000);
 })();
