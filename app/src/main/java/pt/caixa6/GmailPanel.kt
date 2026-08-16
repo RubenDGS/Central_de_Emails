@@ -178,7 +178,7 @@ class GmailPanel(
                     selectionMode = !selectionMode
                     selectedIds.clear()
                     updateSelectionControls()
-                    list.adapter?.notifyDataSetChanged()
+                    (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
                 }
             }
 
@@ -329,7 +329,7 @@ class GmailPanel(
         }
 
         updateSelectionControls()
-        list.adapter?.notifyDataSetChanged()
+        (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
     }
 
     private fun updateSelectionControls() {
