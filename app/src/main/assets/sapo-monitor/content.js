@@ -14,11 +14,10 @@
     return match ? parseInt(match[1], 10) : null;
   }
 
-  function elementLooksLikeInbox(el) {
-    if (!el) return false;
-    const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-    const aria = (el.getAttribute?.("aria-label") || "").trim().toLowerCase();
-    const title = (el.getAttribute?.("title") || "").trim().toLowerCase();
+  function looksLikeInbox(el) {
+    const text = (el?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const aria = (el?.getAttribute?.("aria-label") || "").toLowerCase();
+    const title = (el?.getAttribute?.("title") || "").toLowerCase();
     const joined = `${text} ${aria} ${title}`;
 
     return (
@@ -32,11 +31,12 @@
   function candidateNumber(el) {
     if (!el) return null;
 
-    const classText = String(el.className || "").toLowerCase();
-    const aria = String(el.getAttribute?.("aria-label") || "").toLowerCase();
-    const title = String(el.getAttribute?.("title") || "").toLowerCase();
-    const id = String(el.id || "").toLowerCase();
-    const semantic = `${classText} ${aria} ${title} ${id}`;
+    const semantic = [
+      el.className || "",
+      el.getAttribute?.("aria-label") || "",
+      el.getAttribute?.("title") || "",
+      el.id || ""
+    ].join(" ").toLowerCase();
 
     if (
       semantic.includes("unread") ||
@@ -46,7 +46,7 @@
       semantic.includes("counter") ||
       semantic.includes("count")
     ) {
-      const n = asInt(`${aria} ${title} ${el.textContent || ""}`);
+      const n = asInt(`${semantic} ${el.textContent || ""}`);
       if (n !== null) return n;
     }
 
@@ -55,22 +55,19 @@
   }
 
   function fromInboxArea() {
-    const elements = Array.from(
-      document.querySelectorAll(
-        '[aria-label], [title], nav *, aside *, [role="navigation"] *, body *'
-      )
-    );
-
-    const inboxes = elements.filter(elementLooksLikeInbox).slice(0, 12);
+    const elements = Array.from(document.querySelectorAll("body *"));
+    const inboxes = elements.filter(looksLikeInbox).slice(0, 12);
 
     for (const inbox of inboxes) {
       const directText = (inbox.textContent || "").replace(/\s+/g, " ").trim();
       const directMatch = directText.match(
         /(?:caixa de entrada|recebidos?|inbox)\D{0,20}(\d{1,5})/i
       );
+
       if (directMatch) return parseInt(directMatch[1], 10);
 
       let node = inbox;
+
       for (let depth = 0; depth < 5 && node; depth++, node = node.parentElement) {
         const candidates = [
           node.previousElementSibling,
@@ -85,28 +82,7 @@
         }
       }
     }
-    return null;
-  }
 
-  function fromUnreadSemantics() {
-    const selectors = [
-      '[aria-label*="não lido" i]',
-      '[aria-label*="nao lido" i]',
-      '[aria-label*="unread" i]',
-      '[title*="não lido" i]',
-      '[title*="nao lido" i]',
-      '[title*="unread" i]',
-      '[class*="unread" i]',
-      '[class*="badge" i]',
-      '[class*="counter" i]'
-    ];
-
-    for (const selector of selectors) {
-      for (const el of Array.from(document.querySelectorAll(selector)).slice(0, 100)) {
-        const n = candidateNumber(el);
-        if (n !== null) return n;
-      }
-    }
     return null;
   }
 
@@ -117,20 +93,17 @@
     const inbox = fromInboxArea();
     if (inbox !== null) return inbox;
 
-    const semantic = fromUnreadSemantics();
-    if (semantic !== null) return semantic;
-
     return null;
   }
 
   function sendState(force = false) {
     const unread = detectUnread();
+
     const payload = {
       type: "sapo_state",
-      unread: unread,
+      unread,
       url: location.href,
-      title: document.title || "",
-      ready: document.readyState
+      title: document.title || ""
     };
 
     const serialized = JSON.stringify(payload);
@@ -144,15 +117,14 @@
 
   const observer = new MutationObserver(() => {
     clearTimeout(window.__centralEmailsTimer);
-    window.__centralEmailsTimer = setTimeout(() => sendState(false), 350);
+    window.__centralEmailsTimer = setTimeout(() => sendState(false), 400);
   });
 
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
-    attributes: true,
-    attributeFilter: ["class", "aria-label", "title"]
+    attributes: true
   });
 
   window.addEventListener("hashchange", () => setTimeout(() => sendState(true), 500));
