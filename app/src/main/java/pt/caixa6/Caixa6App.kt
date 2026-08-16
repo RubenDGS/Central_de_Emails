@@ -1,16 +1,19 @@
 package pt.caixa6
 
+import android.app.ActivityManager
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -27,18 +30,34 @@ import org.mozilla.geckoview.WebNotification
 import org.mozilla.geckoview.WebNotificationDelegate
 import java.util.concurrent.TimeUnit
 
-class Caixa6App : Application() {
+class Caixa6App : Application(), Configuration.Provider {
 
     interface UnreadListener {
         fun onUnreadChanged(accountId: String, count: Int)
     }
 
+    /*
+     * O relatório de erros mostrou que o WorkManagerInitializer está
+     * desativado no Manifest final. Ao implementar Configuration.Provider,
+     * WorkManager.getInstance(context) consegue inicializar-se por pedido.
+     */
+    override val workManagerConfiguration: Configuration
+        get() =
+            Configuration.Builder()
+                .setMinimumLoggingLevel(Log.INFO)
+                .build()
+
     private var runtime: GeckoRuntime? = null
     private var sapoExtension: WebExtension? = null
-    private val pendingMonitorSessions = mutableListOf<Pair<String, GeckoSession>>()
-    private val handler = Handler(Looper.getMainLooper())
 
-    val sessions = linkedMapOf<String, GeckoSession>()
+    private val pendingMonitorSessions =
+        mutableListOf<Pair<String, GeckoSession>>()
+
+    private val handler =
+        Handler(Looper.getMainLooper())
+
+    val sessions =
+        linkedMapOf<String, GeckoSession>()
 
     var selectedAccountId: String = "rita_sapo"
         private set
@@ -49,38 +68,111 @@ class Caixa6App : Application() {
 
     private var notificationHintAccountId: String? = null
     private var notificationHintUntil = 0L
-    private val lastWebNotificationAt = mutableMapOf<String, Long>()
 
-    private val unreadCounts = linkedMapOf<String, Int>()
-    private val unreadListeners = mutableSetOf<UnreadListener>()
+    private val lastWebNotificationAt =
+        mutableMapOf<String, Long>()
+
+    private val unreadCounts =
+        linkedMapOf<String, Int>()
+
+    private val unreadListeners =
+        mutableSetOf<UnreadListener>()
 
     override fun onCreate() {
         super.onCreate()
 
-        DEFAULT_ACCOUNTS.forEach {
-            unreadCounts[it.id] = loadUnread(it.id)
+        /*
+         * Os processos filhos do GeckoView também criam Caixa6App.
+         * Nunca devemos inicializar/agendar WorkManager nesses processos.
+         */
+        val mainProcess =
+            isMainApplicationProcess()
+
+        DEFAULT_ACCOUNTS.forEach { account ->
+
+            /*
+             * Gmail só mostra um contador depois de uma leitura Gmail
+             * válida nesta execução. Assim não reaparece um "(1)" antigo.
+             */
+            unreadCounts[account.id] =
+                if (account.id == "rita_gmail") {
+                    0
+                } else {
+                    loadUnread(account.id)
+                }
         }
 
-        createNotificationChannel()
-        schedulePeriodicMailCheck()
+        if (mainProcess) {
+            createNotificationChannel()
+
+            try {
+                schedulePeriodicMailCheck()
+            } catch (error: Exception) {
+                /*
+                 * Mesmo que o WorkManager tenha algum problema,
+                 * a Central de Emails continua a abrir.
+                 */
+                Log.e(
+                    "CentralEmails",
+                    "Não foi possível agendar a verificação de 15 minutos",
+                    error
+                )
+            }
+        }
+    }
+
+    private fun isMainApplicationProcess(): Boolean {
+
+        val pid =
+            android.os.Process.myPid()
+
+        val manager =
+            getSystemService(
+                Context.ACTIVITY_SERVICE
+            ) as ActivityManager
+
+        val processName =
+            manager.runningAppProcesses
+                ?.firstOrNull {
+                    it.pid == pid
+                }
+                ?.processName
+
+        return processName == null ||
+            processName == packageName
     }
 
     private fun getRuntime(): GeckoRuntime {
-        runtime?.let { return it }
 
-        val settings = GeckoRuntimeSettings.Builder()
-            .javaScriptEnabled(true)
-            .build()
+        runtime?.let {
+            return it
+        }
 
-        val created = GeckoRuntime.create(this, settings)
+        val settings =
+            GeckoRuntimeSettings.Builder()
+                .javaScriptEnabled(true)
+                .build()
+
+        val created =
+            GeckoRuntime.create(
+                this,
+                settings
+            )
 
         created.setWebNotificationDelegate(
             object : WebNotificationDelegate {
-                override fun onShowNotification(notification: WebNotification) {
-                    handleWebNotification(notification)
+
+                override fun onShowNotification(
+                    notification: WebNotification
+                ) {
+                    handleWebNotification(
+                        notification
+                    )
                 }
 
-                override fun onCloseNotification(notification: WebNotification) {
+                override fun onCloseNotification(
+                    notification: WebNotification
+                ) {
                     notification.dismiss()
                 }
             }
@@ -93,78 +185,142 @@ class Caixa6App : Application() {
             )
             .accept(
                 { extension ->
+
                     if (extension != null) {
-                        sapoExtension = extension
 
-                        val waiting = pendingMonitorSessions.toList()
-                        pendingMonitorSessions.clear()
+                        sapoExtension =
+                            extension
 
-                        waiting.forEach { (accountId, session) ->
-                            attachMonitor(accountId, session, extension)
+                        val waiting =
+                            pendingMonitorSessions
+                                .toList()
+
+                        pendingMonitorSessions
+                            .clear()
+
+                        waiting.forEach {
+                                (accountId, session) ->
+
+                            attachMonitor(
+                                accountId,
+                                session,
+                                extension
+                            )
                         }
                     }
                 },
                 { error ->
-                    Log.e("CentralEmails", "Erro ao instalar monitor SAPO", error)
+
+                    Log.e(
+                        "CentralEmails",
+                        "Erro ao instalar monitor SAPO",
+                        error
+                    )
                 }
             )
 
-        runtime = created
+        runtime =
+            created
+
         return created
     }
 
-    fun getOrCreateSession(account: Account): GeckoSession {
-        sessions[account.id]?.let { return it }
+    fun getOrCreateSession(
+        account: Account
+    ): GeckoSession {
 
-        val settings = GeckoSessionSettings.Builder()
-            .contextId("central-emails-${account.id}")
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
-            .build()
+        sessions[account.id]?.let {
+            return it
+        }
 
-        val session = GeckoSession(settings)
+        val settings =
+            GeckoSessionSettings.Builder()
+                .contextId(
+                    "central-emails-${account.id}"
+                )
+                .userAgentMode(
+                    GeckoSessionSettings
+                        .USER_AGENT_MODE_MOBILE
+                )
+                .build()
+
+        val session =
+            GeckoSession(settings)
 
         session.setContentDelegate(
-            object : GeckoSession.ContentDelegate {
-                override fun onCrash(session: GeckoSession) {
-                    forgetSession(account.id)
+            object :
+                GeckoSession.ContentDelegate {
+
+                override fun onCrash(
+                    session: GeckoSession
+                ) {
+                    forgetSession(
+                        account.id
+                    )
                 }
 
-                override fun onKill(session: GeckoSession) {
-                    forgetSession(account.id)
+                override fun onKill(
+                    session: GeckoSession
+                ) {
+                    forgetSession(
+                        account.id
+                    )
                 }
             }
         )
 
         session.setPermissionDelegate(
-            object : GeckoSession.PermissionDelegate {
+            object :
+                GeckoSession.PermissionDelegate {
+
                 override fun onContentPermissionRequest(
                     session: GeckoSession,
-                    perm: GeckoSession.PermissionDelegate.ContentPermission
+                    perm:
+                        GeckoSession.PermissionDelegate
+                            .ContentPermission
                 ): GeckoResult<Int> {
 
                     val allow =
                         perm.permission ==
-                            GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION
+                            GeckoSession.PermissionDelegate
+                                .PERMISSION_DESKTOP_NOTIFICATION
 
                     return GeckoResult.fromValue(
                         if (allow) {
-                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                            GeckoSession.PermissionDelegate
+                                .ContentPermission
+                                .VALUE_ALLOW
                         } else {
-                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                            GeckoSession.PermissionDelegate
+                                .ContentPermission
+                                .VALUE_DENY
                         }
                     )
                 }
             }
         )
 
-        session.open(getRuntime())
-        sessions[account.id] = session
+        session.open(
+            getRuntime()
+        )
+
+        sessions[account.id] =
+            session
 
         sapoExtension?.let {
-            attachMonitor(account.id, session, it)
-        } ?: pendingMonitorSessions.add(account.id to session)
+
+            attachMonitor(
+                account.id,
+                session,
+                it
+            )
+
+        } ?: pendingMonitorSessions.add(
+            account.id to session
+        )
 
         startFastLoop()
+
         return session
     }
 
@@ -173,195 +329,488 @@ class Caixa6App : Application() {
         session: GeckoSession,
         extension: WebExtension
     ) {
+
         try {
-            session.webExtensionController.setMessageDelegate(
-                extension,
-                object : WebExtension.MessageDelegate {
-                    override fun onMessage(
-                        nativeApp: String,
-                        message: Any,
-                        sender: WebExtension.MessageSender
-                    ): GeckoResult<Any>? {
 
-                        if (
-                            nativeApp == "sapoMonitor" &&
-                            message is JSONObject &&
-                            message.optString("type") == "sapo_state" &&
-                            message.optString("folder") == "INBOX" &&
-                            message.has("unread") &&
-                            !message.isNull("unread")
-                        ) {
-                            val unread = message.optInt("unread", -1)
+            session.webExtensionController
+                .setMessageDelegate(
+                    extension,
 
-                            if (unread >= 0) {
-                                handler.post {
-                                    updateSapoUnread(accountId, unread)
+                    object :
+                        WebExtension.MessageDelegate {
+
+                        override fun onMessage(
+                            nativeApp: String,
+                            message: Any,
+                            sender:
+                                WebExtension.MessageSender
+                        ): GeckoResult<Any>? {
+
+                            if (
+                                nativeApp ==
+                                    "sapoMonitor" &&
+                                message is JSONObject &&
+                                message.optString(
+                                    "type"
+                                ) ==
+                                    "sapo_state" &&
+                                message.optString(
+                                    "folder"
+                                ) ==
+                                    "INBOX" &&
+                                message.has(
+                                    "unread"
+                                ) &&
+                                !message.isNull(
+                                    "unread"
+                                )
+                            ) {
+
+                                val unread =
+                                    message.optInt(
+                                        "unread",
+                                        -1
+                                    )
+
+                                if (unread >= 0) {
+
+                                    handler.post {
+
+                                        updateSapoUnread(
+                                            accountId,
+                                            unread
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        return null
-                    }
-                },
-                "sapoMonitor"
+                            return null
+                        }
+                    },
+
+                    "sapoMonitor"
+                )
+
+        } catch (
+            error: Exception
+        ) {
+
+            Log.e(
+                "CentralEmails",
+                "Erro no monitor $accountId",
+                error
             )
-        } catch (error: Exception) {
-            Log.e("CentralEmails", "Erro no monitor $accountId", error)
         }
     }
 
-    private fun updateSapoUnread(accountId: String, newCount: Int) {
-        val prefs = getSharedPreferences("central-emails", MODE_PRIVATE)
-        val baselineKey = "baseline_inbox_unread_v3_$accountId"
-        val hadBaseline = prefs.getBoolean(baselineKey, false)
-        val oldCount = unreadCounts[accountId] ?: 0
+    private fun updateSapoUnread(
+        accountId: String,
+        newCount: Int
+    ) {
 
-        unreadCounts[accountId] = newCount
-        saveUnread(accountId, newCount)
-        notifyUnreadListeners(accountId, newCount)
+        val prefs =
+            getSharedPreferences(
+                "central-emails",
+                MODE_PRIVATE
+            )
 
+        val baselineKey =
+            "baseline_inbox_unread_v3_$accountId"
+
+        val hadBaseline =
+            prefs.getBoolean(
+                baselineKey,
+                false
+            )
+
+        val oldCount =
+            unreadCounts[
+                accountId
+            ] ?: 0
+
+        unreadCounts[
+            accountId
+        ] =
+            newCount
+
+        saveUnread(
+            accountId,
+            newCount
+        )
+
+        notifyUnreadListeners(
+            accountId,
+            newCount
+        )
+
+        /*
+         * Primeira leitura válida:
+         * apenas cria a referência.
+         */
         if (!hadBaseline) {
-            prefs.edit().putBoolean(baselineKey, true).apply()
+
+            prefs.edit()
+                .putBoolean(
+                    baselineKey,
+                    true
+                )
+                .apply()
+
             return
         }
 
         if (newCount > oldCount) {
-            val now = SystemClock.elapsedRealtime()
-            val lastWeb = lastWebNotificationAt[accountId] ?: 0L
 
-            if (now - lastWeb > 30_000L) {
-                val difference = newCount - oldCount
+            val now =
+                SystemClock
+                    .elapsedRealtime()
+
+            val lastWeb =
+                lastWebNotificationAt[
+                    accountId
+                ] ?: 0L
+
+            /*
+             * Evita duplicar uma notificação Web
+             * que tenha acabado de chegar.
+             */
+            if (
+                now - lastWeb >
+                30_000L
+            ) {
+
+                val difference =
+                    newCount -
+                        oldCount
 
                 showAccountNotification(
                     accountId,
-                    if (difference == 1) "1 novo email" else "$difference novos emails",
+
+                    if (
+                        difference == 1
+                    ) {
+                        "1 novo email"
+                    } else {
+                        "$difference novos emails"
+                    },
+
                     "Tens $newCount emails por ler na Caixa de Entrada."
                 )
             }
         }
     }
 
-    private fun handleWebNotification(notification: WebNotification) {
-        val accountId = hintedAccount()
+    private fun handleWebNotification(
+        notification: WebNotification
+    ) {
 
-        lastWebNotificationAt[accountId] = SystemClock.elapsedRealtime()
+        val accountId =
+            hintedAccount()
+
+        lastWebNotificationAt[
+            accountId
+        ] =
+            SystemClock
+                .elapsedRealtime()
 
         showAccountNotification(
             accountId,
-            notification.title ?: "Novo email",
-            notification.text ?: "Recebeste uma nova mensagem.",
+            notification.title
+                ?: "Novo email",
+            notification.text
+                ?: "Recebeste uma nova mensagem.",
             notification.tag
         )
     }
 
-    private fun setHint(accountId: String, duration: Long = 30_000L) {
-        notificationHintAccountId = accountId
-        notificationHintUntil = SystemClock.elapsedRealtime() + duration
+    private fun setHint(
+        accountId: String,
+        duration: Long =
+            30_000L
+    ) {
+
+        notificationHintAccountId =
+            accountId
+
+        notificationHintUntil =
+            SystemClock
+                .elapsedRealtime() +
+                duration
     }
 
-    private fun hintedAccount(): String {
-        val hinted = notificationHintAccountId
+    private fun hintedAccount():
+        String {
+
+        val hinted =
+            notificationHintAccountId
 
         return if (
             hinted != null &&
-            SystemClock.elapsedRealtime() <= notificationHintUntil
+            SystemClock
+                .elapsedRealtime()
+                <=
+                notificationHintUntil
         ) {
+
             hinted
+
         } else {
+
             selectedAccountId
         }
     }
 
-    private fun forgetSession(accountId: String) {
+    private fun forgetSession(
+        accountId: String
+    ) {
+
         handler.post {
-            sessions.remove(accountId)
-            pendingMonitorSessions.removeAll { it.first == accountId }
+
+            sessions.remove(
+                accountId
+            )
+
+            pendingMonitorSessions
+                .removeAll {
+                    it.first ==
+                        accountId
+                }
         }
     }
 
-    fun selectAccount(accountId: String) {
-        selectedAccountId = accountId
-        setHint(accountId)
+    fun selectAccount(
+        accountId: String
+    ) {
+
+        selectedAccountId =
+            accountId
+
+        setHint(
+            accountId
+        )
     }
 
-    fun setUiVisible(visible: Boolean) {
-        uiVisible = visible
-        if (!visible) startFastLoop()
-    }
+    fun setUiVisible(
+        visible: Boolean
+    ) {
 
-    fun getUnread(accountId: String): Int =
-        unreadCounts[accountId] ?: 0
+        uiVisible =
+            visible
 
-    fun setGmailUnread(count: Int) {
-        val safe = count.coerceAtLeast(0)
-        unreadCounts["rita_gmail"] = safe
-        saveUnread("rita_gmail", safe)
-        notifyUnreadListeners("rita_gmail", safe)
-    }
-
-    fun addUnreadListener(listener: UnreadListener) {
-        unreadListeners.add(listener)
-    }
-
-    fun removeUnreadListener(listener: UnreadListener) {
-        unreadListeners.remove(listener)
-    }
-
-    private fun notifyUnreadListeners(accountId: String, count: Int) {
-        unreadListeners.toList().forEach {
-            it.onUnreadChanged(accountId, count)
+        if (!visible) {
+            startFastLoop()
         }
     }
 
-    private fun saveUnread(accountId: String, count: Int) {
-        getSharedPreferences("central-emails", MODE_PRIVATE)
+    fun getUnread(
+        accountId: String
+    ): Int =
+        unreadCounts[
+            accountId
+        ] ?: 0
+
+    fun setGmailUnread(
+        count: Int
+    ) {
+
+        val safe =
+            count.coerceAtLeast(
+                0
+            )
+
+        unreadCounts[
+            "rita_gmail"
+        ] =
+            safe
+
+        /*
+         * Pode continuar guardado para uso interno,
+         * mas no próximo arranque não é mostrado
+         * até existir nova leitura da Gmail API.
+         */
+        saveUnread(
+            "rita_gmail",
+            safe
+        )
+
+        notifyUnreadListeners(
+            "rita_gmail",
+            safe
+        )
+    }
+
+    fun addUnreadListener(
+        listener: UnreadListener
+    ) {
+
+        unreadListeners.add(
+            listener
+        )
+    }
+
+    fun removeUnreadListener(
+        listener: UnreadListener
+    ) {
+
+        unreadListeners.remove(
+            listener
+        )
+    }
+
+    private fun notifyUnreadListeners(
+        accountId: String,
+        count: Int
+    ) {
+
+        unreadListeners
+            .toList()
+            .forEach {
+
+                it.onUnreadChanged(
+                    accountId,
+                    count
+                )
+            }
+    }
+
+    private fun saveUnread(
+        accountId: String,
+        count: Int
+    ) {
+
+        getSharedPreferences(
+            "central-emails",
+            MODE_PRIVATE
+        )
             .edit()
-            .putInt("unread_$accountId", count)
+            .putInt(
+                "unread_$accountId",
+                count
+            )
             .apply()
     }
 
-    private fun loadUnread(accountId: String): Int =
-        getSharedPreferences("central-emails", MODE_PRIVATE)
-            .getInt("unread_$accountId", 0)
+    private fun loadUnread(
+        accountId: String
+    ): Int =
 
+        getSharedPreferences(
+            "central-emails",
+            MODE_PRIVATE
+        )
+            .getInt(
+                "unread_$accountId",
+                0
+            )
+
+    /*
+     * Atualização mais frequente enquanto
+     * o processo da aplicação continua vivo.
+     */
     private fun startFastLoop() {
-        if (refreshRunning) return
-        refreshRunning = true
-        handler.postDelayed(::refreshNextSession, 15_000L)
+
+        if (refreshRunning) {
+            return
+        }
+
+        refreshRunning =
+            true
+
+        handler.postDelayed(
+            ::refreshNextSession,
+            15_000L
+        )
     }
 
     private fun refreshNextSession() {
-        val accounts = DEFAULT_ACCOUNTS.filter { it.id != "rita_gmail" }
 
-        if (accounts.isEmpty()) {
-            refreshRunning = false
+        val accounts =
+            DEFAULT_ACCOUNTS
+                .filter {
+                    it.id !=
+                        "rita_gmail"
+                }
+
+        if (
+            accounts.isEmpty()
+        ) {
+
+            refreshRunning =
+                false
+
             return
         }
 
-        if (refreshIndex >= accounts.size) {
-            refreshIndex = 0
-            handler.postDelayed(::refreshNextSession, 60_000L)
+        if (
+            refreshIndex >=
+                accounts.size
+        ) {
+
+            refreshIndex =
+                0
+
+            handler.postDelayed(
+                ::refreshNextSession,
+                60_000L
+            )
+
             return
         }
 
-        val account = accounts[refreshIndex++]
+        val account =
+            accounts[
+                refreshIndex++
+            ]
 
-        val session = try {
-            getOrCreateSession(account)
-        } catch (error: Exception) {
-            Log.e("CentralEmails", "Erro sessão ${account.id}", error)
-            handler.postDelayed(::refreshNextSession, 10_000L)
+        val session =
+            try {
+
+                getOrCreateSession(
+                    account
+                )
+
+            } catch (
+                error: Exception
+            ) {
+
+                Log.e(
+                    "CentralEmails",
+                    "Erro sessão ${account.id}",
+                    error
+                )
+
+                handler.postDelayed(
+                    ::refreshNextSession,
+                    10_000L
+                )
+
+                return
+            }
+
+        if (
+            uiVisible &&
+            account.id ==
+                selectedAccountId
+        ) {
+
+            handler.postDelayed(
+                ::refreshNextSession,
+                5_000L
+            )
+
             return
         }
 
-        if (uiVisible && account.id == selectedAccountId) {
-            handler.postDelayed(::refreshNextSession, 5_000L)
-            return
-        }
+        wake(
+            account,
+            session,
+            14_000L
+        )
 
-        wake(account, session, 14_000L)
-
-        handler.postDelayed(::refreshNextSession, 18_000L)
+        handler.postDelayed(
+            ::refreshNextSession,
+            18_000L
+        )
     }
 
     private fun wake(
@@ -369,51 +818,126 @@ class Caixa6App : Application() {
         session: GeckoSession,
         activeFor: Long
     ) {
-        try {
-            setHint(account.id, activeFor + 10_000L)
 
-            session.setActive(true)
-            session.loadUri(account.url)
+        try {
+
+            setHint(
+                account.id,
+                activeFor +
+                    10_000L
+            )
+
+            session.setActive(
+                true
+            )
+
+            /*
+             * Força a INBOX para o monitor
+             * contar apenas esta pasta.
+             */
+            session.loadUri(
+                account.url
+            )
 
             handler.postDelayed({
+
                 try {
-                    if (!(uiVisible && selectedAccountId == account.id)) {
-                        session.setActive(false)
+
+                    if (
+                        !(
+                            uiVisible &&
+                            selectedAccountId ==
+                                account.id
+                            )
+                    ) {
+
+                        session.setActive(
+                            false
+                        )
                     }
-                } catch (_: Exception) {
+
+                } catch (
+                    _: Exception
+                ) {
                 }
+
             }, activeFor)
 
-        } catch (error: Exception) {
-            Log.e("CentralEmails", "Erro atualização ${account.id}", error)
+        } catch (
+            error: Exception
+        ) {
+
+            Log.e(
+                "CentralEmails",
+                "Erro atualização ${account.id}",
+                error
+            )
         }
     }
 
     /*
-     * Usado pelo WorkManager quando a app não está aberta.
-     * Acorda as 5 sessões SAPO sequencialmente.
+     * Chamado pelo WorkManager quando a app
+     * não está aberta.
      */
-    fun refreshAllSapoForWorker(onFinished: () -> Unit) {
-        handler.post {
-            val accounts = DEFAULT_ACCOUNTS.filter { it.id != "rita_gmail" }
+    fun refreshAllSapoForWorker(
+        onFinished: () -> Unit
+    ) {
 
-            fun next(index: Int) {
-                if (index >= accounts.size) {
+        handler.post {
+
+            val accounts =
+                DEFAULT_ACCOUNTS
+                    .filter {
+                        it.id !=
+                            "rita_gmail"
+                    }
+
+            fun next(
+                index: Int
+            ) {
+
+                if (
+                    index >=
+                        accounts.size
+                ) {
+
                     onFinished()
                     return
                 }
 
-                val account = accounts[index]
+                val account =
+                    accounts[index]
 
                 try {
-                    val session = getOrCreateSession(account)
-                    wake(account, session, 9_000L)
-                } catch (error: Exception) {
-                    Log.e("CentralEmails", "Worker ${account.id}", error)
+
+                    val session =
+                        getOrCreateSession(
+                            account
+                        )
+
+                    wake(
+                        account,
+                        session,
+                        9_000L
+                    )
+
+                } catch (
+                    error: Exception
+                ) {
+
+                    Log.e(
+                        "CentralEmails",
+                        "Worker ${account.id}",
+                        error
+                    )
                 }
 
                 handler.postDelayed(
-                    { next(index + 1) },
+                    {
+                        next(
+                            index + 1
+                        )
+                    },
                     11_000L
                 )
             }
@@ -423,20 +947,36 @@ class Caixa6App : Application() {
     }
 
     private fun schedulePeriodicMailCheck() {
+
+        /*
+         * Esta função só é chamada no processo principal.
+         */
         val constraints =
             Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiredNetworkType(
+                    NetworkType.CONNECTED
+                )
                 .build()
 
         val request =
-            PeriodicWorkRequestBuilder<MailRefreshWorker>(
+            PeriodicWorkRequestBuilder<
+                MailRefreshWorker
+                >(
                 15,
                 TimeUnit.MINUTES
             )
-                .setConstraints(constraints)
+                .setConstraints(
+                    constraints
+                )
                 .build()
 
-        WorkManager.getInstance(this)
+        /*
+         * Como Caixa6App implementa Configuration.Provider,
+         * esta chamada inicializa WorkManager por pedido,
+         * mesmo com o inicializador automático desativado.
+         */
+        WorkManager
+            .getInstance(this)
             .enqueueUniquePeriodicWork(
                 "central-emails-sapo-15min",
                 ExistingPeriodicWorkPolicy.UPDATE,
@@ -444,8 +984,16 @@ class Caixa6App : Application() {
             )
     }
 
-    private fun accountLabel(accountId: String): String =
-        DEFAULT_ACCOUNTS.firstOrNull { it.id == accountId }?.label
+    private fun accountLabel(
+        accountId: String
+    ): String =
+
+        DEFAULT_ACCOUNTS
+            .firstOrNull {
+                it.id ==
+                    accountId
+            }
+            ?.label
             ?: "Central de Emails"
 
     private fun showAccountNotification(
@@ -454,68 +1002,128 @@ class Caixa6App : Application() {
         body: String,
         sourceTag: String = ""
     ) {
-        val manager = getSystemService(NotificationManager::class.java)
-        val label = accountLabel(accountId)
+
+        val manager =
+            getSystemService(
+                NotificationManager::class.java
+            )
+
+        val label =
+            accountLabel(
+                accountId
+            )
 
         val intent =
-            Intent(this, MainActivity::class.java).apply {
+            Intent(
+                this,
+                MainActivity::class.java
+            ).apply {
+
                 flags =
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP
 
-                putExtra("open_account", accountId)
+                putExtra(
+                    "open_account",
+                    accountId
+                )
             }
 
         val pendingIntent =
             PendingIntent.getActivity(
                 this,
-                ("open_$accountId$sourceTag").hashCode(),
+                (
+                    "open_$accountId$sourceTag"
+                    ).hashCode(),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or
                     PendingIntent.FLAG_IMMUTABLE
             )
 
         val builder =
-            if (Build.VERSION.SDK_INT >= 26) {
-                Notification.Builder(this, "mail")
+            if (
+                Build.VERSION.SDK_INT >=
+                    26
+            ) {
+
+                Notification.Builder(
+                    this,
+                    "mail"
+                )
+
             } else {
-                Notification.Builder(this)
+
+                Notification.Builder(
+                    this
+                )
             }
 
         val androidNotification =
             builder
-                .setSmallIcon(R.drawable.ic_mail)
-                .setContentTitle("$label — $titleText")
-                .setContentText(body)
-                .setSubText(label)
-                .setStyle(Notification.BigTextStyle().bigText(body))
-                .setContentIntent(pendingIntent)
-                .setAutoCancel(true)
-                .setGroup("central_mail_$accountId")
+                .setSmallIcon(
+                    R.drawable.ic_mail
+                )
+                .setContentTitle(
+                    "$label — $titleText"
+                )
+                .setContentText(
+                    body
+                )
+                .setSubText(
+                    label
+                )
+                .setStyle(
+                    Notification
+                        .BigTextStyle()
+                        .bigText(
+                            body
+                        )
+                )
+                .setContentIntent(
+                    pendingIntent
+                )
+                .setAutoCancel(
+                    true
+                )
+                .setGroup(
+                    "central_mail_$accountId"
+                )
                 .build()
 
         manager.notify(
             (
                 "$accountId:$sourceTag:$titleText:$body:" +
                     System.currentTimeMillis()
-            ).hashCode(),
+                ).hashCode(),
             androidNotification
         )
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val manager = getSystemService(NotificationManager::class.java)
 
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    "mail",
-                    "Central de Emails",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Novos emails"
-                }
-            )
+        if (
+            Build.VERSION.SDK_INT >=
+                26
+        ) {
+
+            val manager =
+                getSystemService(
+                    NotificationManager::class.java
+                )
+
+            manager
+                .createNotificationChannel(
+                    NotificationChannel(
+                        "mail",
+                        "Central de Emails",
+                        NotificationManager
+                            .IMPORTANCE_HIGH
+                    ).apply {
+
+                        description =
+                            "Novos emails"
+                    }
+                )
         }
     }
 }
