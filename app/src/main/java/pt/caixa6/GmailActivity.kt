@@ -1,9 +1,7 @@
+
 package pt.caixa6
 
-import android.app.Activity
 import android.app.AlertDialog
-import android.content.Intent
-import android.content.IntentSender
 import android.graphics.Color
 import android.os.Bundle
 import android.text.Html
@@ -18,6 +16,9 @@ import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.ClearTokenRequest
 import com.google.android.gms.auth.api.identity.Identity
@@ -28,11 +29,9 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-class GmailActivity : Activity() {
+class GmailActivity : ComponentActivity() {
 
     companion object {
-        private const val REQUEST_AUTHORIZE = 8401
-
         private const val GMAIL_MODIFY =
             "https://www.googleapis.com/auth/gmail.modify"
     }
@@ -53,6 +52,54 @@ class GmailActivity : Activity() {
 
     private var accessToken: String? = null
     private val rows = mutableListOf<GmailRow>()
+
+    /*
+     * Fluxo recomendado atualmente pelo Google:
+     * PendingIntent -> ActivityResultLauncher -> getAuthorizationResultFromIntent().
+     */
+    private val authorizationLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.StartIntentSenderForResult()
+        ) { activityResult ->
+
+            val data = activityResult.data
+
+            if (data == null) {
+                showError(
+                    "A autorização do Gmail não devolveu resposta."
+                )
+                return@registerForActivityResult
+            }
+
+            try {
+                val result =
+                    Identity.getAuthorizationClient(this)
+                        .getAuthorizationResultFromIntent(data)
+
+                val token = result.accessToken
+
+                if (token.isNullOrBlank()) {
+                    showError(
+                        "A Google autorizou a conta, mas não devolveu token de acesso."
+                    )
+                    return@registerForActivityResult
+                }
+
+                accessToken = token
+                loadInbox()
+
+            } catch (e: ApiException) {
+                showError(
+                    "Autorização Gmail falhou " +
+                        "(código ${e.statusCode})."
+                )
+            } catch (e: Exception) {
+                showError(
+                    "Autorização Gmail falhou: " +
+                        (e.message ?: "erro desconhecido")
+                )
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -165,35 +212,53 @@ class GmailActivity : Activity() {
         progress.visibility = View.VISIBLE
         status.text = "A autorizar o acesso ao Gmail…"
 
-        val request = AuthorizationRequest.builder()
-            .setRequestedScopes(
-                listOf(
-                    Scope(GMAIL_MODIFY)
+        val request =
+            AuthorizationRequest.builder()
+                .setRequestedScopes(
+                    listOf(
+                        Scope(GMAIL_MODIFY)
+                    )
                 )
-            )
-            .build()
+                .build()
 
         Identity.getAuthorizationClient(this)
             .authorize(request)
             .addOnSuccessListener { result ->
+
                 if (result.hasResolution()) {
-                    try {
-                        startIntentSenderForResult(
-                            result.pendingIntent!!.intentSender,
-                            REQUEST_AUTHORIZE,
-                            null,
-                            0,
-                            0,
-                            0
-                        )
-                    } catch (_: IntentSender.SendIntentException) {
+                    val pendingIntent = result.pendingIntent
+
+                    if (pendingIntent == null) {
                         showError(
-                            "Não foi possível abrir a autorização Google."
+                            "A Google não devolveu a janela de autorização."
+                        )
+                        return@addOnSuccessListener
+                    }
+
+                    try {
+                        authorizationLauncher.launch(
+                            IntentSenderRequest.Builder(
+                                pendingIntent.intentSender
+                            ).build()
+                        )
+                    } catch (e: Exception) {
+                        showError(
+                            "Não foi possível abrir a autorização Google: " +
+                                (e.message ?: "erro desconhecido")
                         )
                     }
+
                 } else {
-                    accessToken = result.accessToken
-                    loadInbox()
+                    val token = result.accessToken
+
+                    if (token.isNullOrBlank()) {
+                        showError(
+                            "A Google não devolveu token de acesso."
+                        )
+                    } else {
+                        accessToken = token
+                        loadInbox()
+                    }
                 }
             }
             .addOnFailureListener { error ->
@@ -202,36 +267,6 @@ class GmailActivity : Activity() {
                         (error.message ?: "erro desconhecido")
                 )
             }
-    }
-
-    @Deprecated("Compatibilidade com Google Identity Services")
-    override fun onActivityResult(
-        requestCode: Int,
-        resultCode: Int,
-        data: Intent?
-    ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        )
-
-        if (requestCode != REQUEST_AUTHORIZE) return
-
-        try {
-            val result =
-                Identity.getAuthorizationClient(this)
-                    .getAuthorizationResultFromIntent(data)
-
-            accessToken = result.accessToken
-            loadInbox()
-
-        } catch (e: ApiException) {
-            showError(
-                "A autorização do Gmail falhou: " +
-                    e.statusCode
-            )
-        }
     }
 
     private fun loadInbox() {
@@ -287,8 +322,17 @@ class GmailActivity : Activity() {
 
                         val item = JSONObject(metadata)
                         val labels = item.optJSONArray("labelIds")
-                        val unreadMessage =
-                            labels?.toString()?.contains("UNREAD") == true
+
+                        var unreadMessage = false
+
+                        if (labels != null) {
+                            for (l in 0 until labels.length()) {
+                                if (labels.optString(l) == "UNREAD") {
+                                    unreadMessage = true
+                                    break
+                                }
+                            }
+                        }
 
                         val headers =
                             item.getJSONObject("payload")
@@ -352,6 +396,7 @@ class GmailActivity : Activity() {
                                 if (unreadMessage) {
                                     append("● ")
                                 }
+
                                 append(subject)
 
                                 if (from.isNotBlank()) {
@@ -386,10 +431,7 @@ class GmailActivity : Activity() {
 
             } catch (e: Exception) {
                 runOnUiThread {
-                    handleApiFailure(
-                        token,
-                        e
-                    )
+                    handleApiFailure(token, e)
                 }
             }
         }.start()
@@ -467,32 +509,23 @@ class GmailActivity : Activity() {
                     )
                 }
 
-                val finalSubject = subject
-                val finalFrom = from
-                val finalMessageId = messageIdHeader
+                val finalRow =
+                    row.copy(
+                        subject = subject,
+                        from = from,
+                        messageIdHeader = messageIdHeader,
+                        unread = false
+                    )
 
                 runOnUiThread {
                     progress.visibility = View.GONE
-
-                    showMessageDialog(
-                        row.copy(
-                            subject = finalSubject,
-                            from = finalFrom,
-                            messageIdHeader = finalMessageId,
-                            unread = false
-                        ),
-                        body
-                    )
-
+                    showMessageDialog(finalRow, body)
                     loadInbox()
                 }
 
             } catch (e: Exception) {
                 runOnUiThread {
-                    handleApiFailure(
-                        token,
-                        e
-                    )
+                    handleApiFailure(token, e)
                 }
             }
         }.start()
@@ -502,7 +535,7 @@ class GmailActivity : Activity() {
         row: GmailRow,
         body: String
     ) {
-        val text = TextView(this).apply {
+        val textView = TextView(this).apply {
             setPadding(36, 20, 36, 20)
             textSize = 16f
             setTextIsSelectable(true)
@@ -521,20 +554,17 @@ class GmailActivity : Activity() {
                 }
         }
 
-        val dialog =
-            AlertDialog.Builder(this)
-                .setTitle("Rita Gmail")
-                .setView(text)
-                .setPositiveButton("Responder") { _, _ ->
-                    showReplyDialog(row)
-                }
-                .setNeutralButton("Não lido") { _, _ ->
-                    markUnread(row.id)
-                }
-                .setNegativeButton("Fechar", null)
-                .create()
-
-        dialog.show()
+        AlertDialog.Builder(this)
+            .setTitle("Rita Gmail")
+            .setView(textView)
+            .setPositiveButton("Responder") { _, _ ->
+                showReplyDialog(row)
+            }
+            .setNeutralButton("Não lido") { _, _ ->
+                markUnread(row.id)
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
     }
 
     private fun showComposeDialog() {
@@ -613,7 +643,7 @@ class GmailActivity : Activity() {
             }
 
         AlertDialog.Builder(this)
-            .setTitle("Responder a ${row.from}")
+            .setTitle("Responder")
             .setView(container)
             .setPositiveButton("Enviar") { _, _ ->
                 sendMail(
@@ -646,10 +676,7 @@ class GmailActivity : Activity() {
 
             } catch (e: Exception) {
                 runOnUiThread {
-                    handleApiFailure(
-                        token,
-                        e
-                    )
+                    handleApiFailure(token, e)
                 }
             }
         }.start()
@@ -688,18 +715,14 @@ class GmailActivity : Activity() {
                             append("References: $inReplyTo\r\n")
                         }
 
-                        append(
-                            "Content-Type: text/plain; charset=UTF-8\r\n"
-                        )
+                        append("Content-Type: text/plain; charset=UTF-8\r\n")
                         append("\r\n")
                         append(body)
                     }
 
                 val encoded =
                     Base64.encodeToString(
-                        raw.toByteArray(
-                            Charsets.UTF_8
-                        ),
+                        raw.toByteArray(Charsets.UTF_8),
                         Base64.URL_SAFE or
                             Base64.NO_WRAP or
                             Base64.NO_PADDING
@@ -707,16 +730,10 @@ class GmailActivity : Activity() {
 
                 val json =
                     JSONObject()
-                        .put(
-                            "raw",
-                            encoded
-                        )
+                        .put("raw", encoded)
 
                 if (threadId.isNotBlank()) {
-                    json.put(
-                        "threadId",
-                        threadId
-                    )
+                    json.put("threadId", threadId)
                 }
 
                 apiRequest(
@@ -728,6 +745,7 @@ class GmailActivity : Activity() {
 
                 runOnUiThread {
                     progress.visibility = View.GONE
+
                     Toast.makeText(
                         this,
                         "Email enviado.",
@@ -739,10 +757,7 @@ class GmailActivity : Activity() {
 
             } catch (e: Exception) {
                 runOnUiThread {
-                    handleApiFailure(
-                        token,
-                        e
-                    )
+                    handleApiFailure(token, e)
                 }
             }
         }.start()
@@ -773,26 +788,16 @@ class GmailActivity : Activity() {
         )
     }
 
-    private fun extractBody(
-        part: JSONObject
-    ): String {
+    private fun extractBody(part: JSONObject): String {
         val mime = part.optString("mimeType")
         val body = part.optJSONObject("body")
-        val data =
-            body?.optString("data", "")
-                ?: ""
+        val data = body?.optString("data", "") ?: ""
 
         if (
             data.isNotBlank() &&
             (
-                mime.equals(
-                    "text/plain",
-                    true
-                ) ||
-                    mime.equals(
-                        "text/html",
-                        true
-                    )
+                mime.equals("text/plain", true) ||
+                    mime.equals("text/html", true)
                 )
         ) {
             val decoded =
@@ -806,12 +811,7 @@ class GmailActivity : Activity() {
                     Charsets.UTF_8
                 )
 
-            return if (
-                mime.equals(
-                    "text/html",
-                    true
-                )
-            ) {
+            return if (mime.equals("text/html", true)) {
                 Html.fromHtml(
                     decoded,
                     Html.FROM_HTML_MODE_LEGACY
@@ -821,30 +821,21 @@ class GmailActivity : Activity() {
             }
         }
 
-        val parts =
-            part.optJSONArray("parts")
+        val parts = part.optJSONArray("parts")
 
         if (parts != null) {
             var fallback = ""
 
-            for (
-                i in 0 until parts.length()
-            ) {
-                val child =
-                    parts.getJSONObject(i)
-
+            for (i in 0 until parts.length()) {
+                val child = parts.getJSONObject(i)
                 val childMime =
                     child.optString("mimeType")
 
-                val result =
-                    extractBody(child)
+                val result = extractBody(child)
 
                 if (
                     result.isNotBlank() &&
-                    childMime.equals(
-                        "text/plain",
-                        true
-                    )
+                    childMime.equals("text/plain", true)
                 ) {
                     return result
                 }
@@ -870,9 +861,7 @@ class GmailActivity : Activity() {
         body: String? = null
     ): String {
         val connection =
-            URL(url)
-                .openConnection() as
-                HttpURLConnection
+            URL(url).openConnection() as HttpURLConnection
 
         connection.requestMethod = method
         connection.setRequestProperty(
@@ -893,9 +882,7 @@ class GmailActivity : Activity() {
 
             connection.outputStream.use {
                 it.write(
-                    body.toByteArray(
-                        Charsets.UTF_8
-                    )
+                    body.toByteArray(Charsets.UTF_8)
                 )
             }
         }
@@ -912,9 +899,7 @@ class GmailActivity : Activity() {
         val result =
             stream
                 ?.bufferedReader()
-                ?.use {
-                    it.readText()
-                }
+                ?.use { it.readText() }
                 ?: ""
 
         connection.disconnect()
@@ -937,11 +922,7 @@ class GmailActivity : Activity() {
         val message =
             error.message ?: "erro desconhecido"
 
-        if (
-            message.contains(
-                "HTTP 401"
-            )
-        ) {
+        if (message.contains("HTTP 401")) {
             Identity.getAuthorizationClient(this)
                 .clearToken(
                     ClearTokenRequest.builder()
@@ -950,6 +931,7 @@ class GmailActivity : Activity() {
                 )
                 .addOnCompleteListener {
                     accessToken = null
+
                     status.text =
                         "A sessão Google expirou. Carrega em Atualizar para voltar a autorizar."
                 }
