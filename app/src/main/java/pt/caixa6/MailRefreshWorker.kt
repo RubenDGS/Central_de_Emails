@@ -12,14 +12,39 @@ class MailRefreshWorker(
 ) : Worker(appContext, params) {
 
     override fun doWork(): Result {
-        val app = applicationContext as Caixa6App
-        val latch = CountDownLatch(1)
+        val app =
+            applicationContext as Caixa6App
+
+        /*
+         * SAPO: até ~70 s para percorrer as cinco contas.
+         */
+        val sapoLatch =
+            CountDownLatch(1)
 
         app.refreshAllSapoForWorker {
-            latch.countDown()
+            sapoLatch.countDown()
         }
 
-        latch.await(70, TimeUnit.SECONDS)
+        sapoLatch.await(
+            70,
+            TimeUnit.SECONDS
+        )
+
+        /*
+         * Gmail: autorização silenciosa + leitura do contador INBOX.
+         */
+        val gmailLatch =
+            CountDownLatch(1)
+
+        app.refreshGmailForWorker {
+            gmailLatch.countDown()
+        }
+
+        gmailLatch.await(
+            25,
+            TimeUnit.SECONDS
+        )
+
         return Result.success()
     }
 }

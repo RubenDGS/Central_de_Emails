@@ -22,12 +22,9 @@ import com.google.android.gms.common.api.Scope
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 
-class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
-
-    companion object {
-        private const val GMAIL_MODIFY =
-            "https://www.googleapis.com/auth/gmail.modify"
-    }
+class MainActivity :
+    ComponentActivity(),
+    Caixa6App.UnreadListener {
 
     private lateinit var app: Caixa6App
     private lateinit var geckoView: GeckoView
@@ -39,188 +36,284 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     private val accountButtons =
         linkedMapOf<String, Button>()
 
-    private var currentSession: GeckoSession? = null
+    private var currentSession:
+        GeckoSession? = null
 
     private val authorizationLauncher =
         registerForActivityResult(
-            ActivityResultContracts.StartIntentSenderForResult()
+            ActivityResultContracts
+                .StartIntentSenderForResult()
         ) { result ->
 
-            val data = result.data
+            val data =
+                result.data
 
             if (data == null) {
-                gmailPanel.showAuthorizationError(
-                    "A autorização do Gmail não devolveu resposta."
-                )
+                gmailPanel
+                    .showAuthorizationError(
+                        "A autorização do Gmail não devolveu resposta."
+                    )
                 return@registerForActivityResult
             }
 
             try {
                 val authorization =
-                    Identity.getAuthorizationClient(this)
-                        .getAuthorizationResultFromIntent(data)
+                    Identity
+                        .getAuthorizationClient(
+                            this
+                        )
+                        .getAuthorizationResultFromIntent(
+                            data
+                        )
 
-                val token = authorization.accessToken
+                val token =
+                    authorization
+                        .accessToken
 
-                if (token.isNullOrBlank()) {
-                    gmailPanel.showAuthorizationError(
-                        "A Google autorizou a conta, mas não devolveu token de acesso."
-                    )
+                if (
+                    token.isNullOrBlank()
+                ) {
+                    gmailPanel
+                        .showAuthorizationError(
+                            "A Google autorizou a conta, mas não devolveu token de acesso."
+                        )
                 } else {
-                    gmailPanel.setAuthorizedToken(token)
+                    gmailPanel
+                        .setAuthorizedToken(
+                            token
+                        )
                 }
 
-            } catch (e: ApiException) {
-                gmailPanel.showAuthorizationError(
-                    "Autorização Gmail falhou (código ${e.statusCode})."
-                )
-            } catch (e: Exception) {
-                gmailPanel.showAuthorizationError(
-                    "Autorização Gmail falhou: " +
-                        (e.message ?: "erro desconhecido")
-                )
+            } catch (
+                e: ApiException
+            ) {
+                gmailPanel
+                    .showAuthorizationError(
+                        "Autorização Gmail falhou (código ${e.statusCode})."
+                    )
+
+            } catch (
+                e: Exception
+            ) {
+                gmailPanel
+                    .showAuthorizationError(
+                        "Autorização Gmail falhou: " +
+                            (
+                                e.message
+                                    ?: "erro desconhecido"
+                                )
+                    )
             }
         }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
+        super.onCreate(
+            savedInstanceState
+        )
 
-        app = application as Caixa6App
-        app.addUnreadListener(this)
+        app =
+            application
+                as Caixa6App
+
+        app.addUnreadListener(
+            this
+        )
 
         requestNotificationPermission()
 
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.WHITE
+        window.statusBarColor =
+            Color.TRANSPARENT
+
+        window.navigationBarColor =
+            Color.WHITE
 
         @Suppress("DEPRECATION")
         run {
-            window.decorView.systemUiVisibility =
+            window.decorView
+                .systemUiVisibility =
                 View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
         }
 
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.background_pastel)
+        root =
+            LinearLayout(
+                this
+            ).apply {
 
-            setOnApplyWindowInsetsListener { view, insets ->
+                orientation =
+                    LinearLayout.VERTICAL
 
-                if (Build.VERSION.SDK_INT >= 30) {
-                    val bars =
-                        insets.getInsets(
-                            WindowInsets.Type.statusBars() or
-                                WindowInsets.Type.navigationBars()
+                setBackgroundResource(
+                    R.drawable.background_pastel
+                )
+
+                setOnApplyWindowInsetsListener {
+                        view,
+                        insets ->
+
+                    if (
+                        Build.VERSION.SDK_INT >=
+                        30
+                    ) {
+                        val bars =
+                            insets.getInsets(
+                                WindowInsets.Type.statusBars() or
+                                    WindowInsets.Type.navigationBars()
+                            )
+
+                        view.setPadding(
+                            0,
+                            bars.top,
+                            0,
+                            bars.bottom
                         )
 
-                    view.setPadding(
-                        0,
-                        bars.top,
-                        0,
-                        bars.bottom
-                    )
+                    } else {
 
-                } else {
-                    @Suppress("DEPRECATION")
-                    view.setPadding(
-                        0,
-                        insets.systemWindowInsetTop,
-                        0,
-                        insets.systemWindowInsetBottom
-                    )
+                        @Suppress("DEPRECATION")
+                        view.setPadding(
+                            0,
+                            insets.systemWindowInsetTop,
+                            0,
+                            insets.systemWindowInsetBottom
+                        )
+                    }
+
+                    insets
                 }
-
-                insets
             }
-        }
 
-        tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        tabRow =
+            LinearLayout(
+                this
+            ).apply {
 
-            setPadding(
-                dp(3),
-                dp(5),
-                dp(3),
-                dp(5)
-            )
-
-            setBackgroundColor(
-                Color.argb(
-                    80,
-                    255,
-                    255,
-                    255
-                )
-            )
-        }
-
-        DEFAULT_ACCOUNTS.forEach { account ->
-
-            val button = Button(this).apply {
-
-                isAllCaps = false
-                textSize = 9.8f
-                gravity = Gravity.CENTER
-                maxLines = 2
-                includeFontPadding = false
-
-                minWidth = 0
-                minimumWidth = 0
-                minHeight = 0
-                minimumHeight = 0
-
-                setTextColor(
-                    Color.parseColor("#333333")
-                )
+                orientation =
+                    LinearLayout.HORIZONTAL
 
                 setPadding(
-                    dp(1),
-                    dp(7),
-                    dp(1),
-                    dp(7)
+                    dp(3),
+                    dp(5),
+                    dp(3),
+                    dp(5)
                 )
 
-                setOnClickListener {
-
-                    if (account.id == "rita_gmail") {
-                        openGmail()
-                    } else {
-                        openSapo(account)
-                    }
-                }
+                setBackgroundColor(
+                    Color.argb(
+                        80,
+                        255,
+                        255,
+                        255
+                    )
+                )
             }
 
-            accountButtons[account.id] = button
+        DEFAULT_ACCOUNTS
+            .forEach {
+                    account ->
 
-            val params =
-                LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1f
-                ).apply {
+                val button =
+                    Button(
+                        this
+                    ).apply {
 
-                    setMargins(
-                        dp(1),
-                        0,
-                        dp(1),
-                        0
-                    )
-                }
+                        isAllCaps =
+                            false
 
-            tabRow.addView(
-                button,
-                params
-            )
-        }
+                        textSize =
+                            9.8f
+
+                        gravity =
+                            Gravity.CENTER
+
+                        maxLines =
+                            2
+
+                        includeFontPadding =
+                            false
+
+                        minWidth =
+                            0
+
+                        minimumWidth =
+                            0
+
+                        minHeight =
+                            0
+
+                        minimumHeight =
+                            0
+
+                        setTextColor(
+                            Color.parseColor(
+                                "#333333"
+                            )
+                        )
+
+                        setPadding(
+                            dp(1),
+                            dp(7),
+                            dp(1),
+                            dp(7)
+                        )
+
+                        setOnClickListener {
+
+                            if (
+                                account.id ==
+                                "rita_gmail"
+                            ) {
+                                openGmail()
+                            } else {
+                                openSapo(
+                                    account
+                                )
+                            }
+                        }
+                    }
+
+                accountButtons[
+                    account.id
+                ] =
+                    button
+
+                val params =
+                    LinearLayout
+                        .LayoutParams(
+                            0,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            1f
+                        )
+                        .apply {
+                            setMargins(
+                                dp(1),
+                                0,
+                                dp(1),
+                                0
+                            )
+                        }
+
+                tabRow.addView(
+                    button,
+                    params
+                )
+            }
 
         contentHolder =
-            LinearLayout(this).apply {
+            LinearLayout(
+                this
+            ).apply {
                 orientation =
                     LinearLayout.VERTICAL
             }
 
         geckoView =
-            GeckoView(this).apply {
-                visibility = View.GONE
+            GeckoView(
+                this
+            ).apply {
+                visibility =
+                    View.GONE
             }
 
         gmailPanel =
@@ -230,7 +323,8 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             ) {
                 requestGmailAuthorization()
             }.apply {
-                visibility = View.GONE
+                visibility =
+                    View.GONE
             }
 
         contentHolder.addView(
@@ -268,45 +362,67 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             )
         )
 
-        setContentView(root)
+        setContentView(
+            root
+        )
 
         refreshAllButtons()
 
         intent
-            .getStringExtra("open_account")
+            .getStringExtra(
+                "open_account"
+            )
             ?.let {
-                openAccountById(it)
+                openAccountById(
+                    it
+                )
             }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
+    override fun onNewIntent(
+        intent: Intent
+    ) {
+        super.onNewIntent(
+            intent
+        )
 
         intent
-            .getStringExtra("open_account")
+            .getStringExtra(
+                "open_account"
+            )
             ?.let {
-                openAccountById(it)
+                openAccountById(
+                    it
+                )
             }
     }
 
-    private fun openAccountById(accountId: String) {
-
+    private fun openAccountById(
+        accountId: String
+    ) {
         val account =
             DEFAULT_ACCOUNTS
                 .firstOrNull {
-                    it.id == accountId
+                    it.id ==
+                        accountId
                 }
                 ?: return
 
-        if (account.id == "rita_gmail") {
+        if (
+            account.id ==
+            "rita_gmail"
+        ) {
             openGmail()
         } else {
-            openSapo(account)
+            openSapo(
+                account
+            )
         }
     }
 
-    private fun openSapo(account: Account) {
-
+    private fun openSapo(
+        account: Account
+    ) {
         gmailPanel.visibility =
             View.GONE
 
@@ -314,20 +430,36 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             View.VISIBLE
 
         val session =
-            app.getOrCreateSession(account)
+            app.getOrCreateSession(
+                account
+            )
 
-        if (currentSession !== session) {
+        if (
+            currentSession !==
+            session
+        ) {
+            currentSession
+                ?.let {
+                    it.setFocused(
+                        false
+                    )
+                    it.setActive(
+                        false
+                    )
+                }
 
-            currentSession?.let {
-                it.setFocused(false)
-                it.setActive(false)
+            if (
+                geckoView.session !=
+                null
+            ) {
+                geckoView
+                    .releaseSession()
             }
 
-            if (geckoView.session != null) {
-                geckoView.releaseSession()
-            }
-
-            geckoView.setSession(session)
+            geckoView
+                .setSession(
+                    session
+                )
 
             currentSession =
                 session
@@ -337,13 +469,14 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             account.id
         )
 
-        session.setActive(true)
-        session.setFocused(true)
+        session.setActive(
+            true
+        )
 
-        /*
-         * Abre sempre diretamente
-         * na Caixa de Entrada SAPO.
-         */
+        session.setFocused(
+            true
+        )
+
         session.loadUri(
             account.url
         )
@@ -354,11 +487,16 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     }
 
     private fun openGmail() {
+        currentSession
+            ?.let {
+                it.setFocused(
+                    false
+                )
 
-        currentSession?.let {
-            it.setFocused(false)
-            it.setActive(false)
-        }
+                it.setActive(
+                    false
+                )
+            }
 
         geckoView.visibility =
             View.GONE
@@ -378,83 +516,103 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     }
 
     private fun requestGmailAuthorization() {
-
         val request =
-            AuthorizationRequest.builder()
+            AuthorizationRequest
+                .builder()
                 .setRequestedScopes(
                     listOf(
                         Scope(
-                            GMAIL_MODIFY
+                            Caixa6App
+                                .GMAIL_MODIFY
                         )
                     )
                 )
                 .build()
 
-        Identity.getAuthorizationClient(this)
-            .authorize(request)
-            .addOnSuccessListener { result ->
+        Identity
+            .getAuthorizationClient(
+                this
+            )
+            .authorize(
+                request
+            )
+            .addOnSuccessListener {
+                    result ->
 
-                if (result.hasResolution()) {
-
+                if (
+                    result.hasResolution()
+                ) {
                     val pendingIntent =
                         result.pendingIntent
 
-                    if (pendingIntent == null) {
-
-                        gmailPanel.showAuthorizationError(
-                            "A Google não devolveu a janela de autorização."
-                        )
+                    if (
+                        pendingIntent ==
+                        null
+                    ) {
+                        gmailPanel
+                            .showAuthorizationError(
+                                "A Google não devolveu a janela de autorização."
+                            )
 
                         return@addOnSuccessListener
                     }
 
                     try {
-
-                        authorizationLauncher.launch(
-                            IntentSenderRequest.Builder(
-                                pendingIntent.intentSender
-                            ).build()
-                        )
-
-                    } catch (e: Exception) {
-
-                        gmailPanel.showAuthorizationError(
-                            "Não foi possível abrir a autorização Google: " +
-                                (
-                                    e.message
-                                        ?: "erro desconhecido"
+                        authorizationLauncher
+                            .launch(
+                                IntentSenderRequest
+                                    .Builder(
+                                        pendingIntent
+                                            .intentSender
                                     )
-                        )
+                                    .build()
+                            )
+
+                    } catch (
+                        e: Exception
+                    ) {
+                        gmailPanel
+                            .showAuthorizationError(
+                                "Não foi possível abrir a autorização Google: " +
+                                    (
+                                        e.message
+                                            ?: "erro desconhecido"
+                                        )
+                            )
                     }
 
                 } else {
-
                     val token =
-                        result.accessToken
+                        result
+                            .accessToken
 
-                    if (token.isNullOrBlank()) {
-
-                        gmailPanel.showAuthorizationError(
-                            "A Google não devolveu token de acesso."
-                        )
+                    if (
+                        token.isNullOrBlank()
+                    ) {
+                        gmailPanel
+                            .showAuthorizationError(
+                                "A Google não devolveu token de acesso."
+                            )
 
                     } else {
-
-                        gmailPanel.setAuthorizedToken(
-                            token
-                        )
+                        gmailPanel
+                            .setAuthorizedToken(
+                                token
+                            )
                     }
                 }
             }
-            .addOnFailureListener { error ->
+            .addOnFailureListener {
+                    error ->
 
-                gmailPanel.showAuthorizationError(
-                    "Não foi possível autorizar o Gmail: " +
-                        (
-                            error.message
-                                ?: "erro desconhecido"
-                            )
-                )
+                gmailPanel
+                    .showAuthorizationError(
+                        "Não foi possível autorizar o Gmail: " +
+                            (
+                                error.message
+                                    ?: "erro desconhecido"
+                                )
+                    )
             }
     }
 
@@ -462,7 +620,6 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
         accountId: String,
         count: Int
     ) {
-
         runOnUiThread {
             refreshButton(
                 accountId
@@ -471,18 +628,17 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     }
 
     private fun refreshAllButtons() {
-
-        DEFAULT_ACCOUNTS.forEach {
-            refreshButton(
-                it.id
-            )
-        }
+        DEFAULT_ACCOUNTS
+            .forEach {
+                refreshButton(
+                    it.id
+                )
+            }
     }
 
     private fun refreshButton(
         accountId: String
     ) {
-
         val account =
             DEFAULT_ACCOUNTS
                 .firstOrNull {
@@ -494,8 +650,7 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
         val button =
             accountButtons[
                 accountId
-            ]
-                ?: return
+            ] ?: return
 
         val count =
             app.getUnread(
@@ -503,28 +658,32 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             )
 
         val parts =
-            account.label.split(
-                " ",
-                limit = 2
-            )
+            account.label
+                .split(
+                    " ",
+                    limit = 2
+                )
 
         val first =
-            parts.getOrElse(0) {
+            parts.getOrElse(
+                0
+            ) {
                 account.label
             }
 
         val second =
-            parts.getOrElse(1) {
+            parts.getOrElse(
+                1
+            ) {
                 ""
             }
 
         button.text =
-            if (count > 0) {
-
+            if (
+                count > 0
+            ) {
                 "$first\n$second ($count)"
-
             } else {
-
                 "$first\n$second"
             }
 
@@ -539,19 +698,22 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     private fun updateSelectedButton(
         selectedId: String
     ) {
+        accountButtons.keys
+            .forEach {
+                    id ->
 
-        accountButtons.keys.forEach { id ->
+                val button =
+                    accountButtons[
+                        id
+                    ] ?: return@forEach
 
-            val button =
-                accountButtons[id]
-                    ?: return@forEach
-
-            button.background =
-                createButtonBackground(
-                    id,
-                    id == selectedId
-                )
-        }
+                button.background =
+                    createButtonBackground(
+                        id,
+                        id ==
+                            selectedId
+                    )
+            }
     }
 
     override fun onResume() {
@@ -567,29 +729,33 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
             app.selectedAccountId !=
             "rita_gmail"
         ) {
+            currentSession
+                ?.let {
+                    it.setActive(
+                        true
+                    )
 
-            currentSession?.let {
-                it.setActive(true)
-                it.setFocused(true)
-            }
+                    it.setFocused(
+                        true
+                    )
+                }
         }
     }
 
     override fun onPause() {
-
         app.setUiVisible(
             false
         )
 
-        currentSession?.setFocused(
-            false
-        )
+        currentSession
+            ?.setFocused(
+                false
+            )
 
         super.onPause()
     }
 
     override fun onDestroy() {
-
         app.removeUnreadListener(
             this
         )
@@ -612,56 +778,59 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
                 id
             )
 
-        return GradientDrawable().apply {
+        return GradientDrawable()
+            .apply {
 
-            shape =
-                GradientDrawable.RECTANGLE
+                shape =
+                    GradientDrawable
+                        .RECTANGLE
 
-            setColor(
-                if (selected) {
+                setColor(
+                    if (
+                        selected
+                    ) {
+                        darken(
+                            base,
+                            0.95f
+                        )
+                    } else {
+                        base
+                    }
+                )
 
-                    darken(
-                        base,
-                        0.95f
-                    )
+                cornerRadius =
+                    dp(13)
+                        .toFloat()
 
-                } else {
+                setStroke(
+                    if (
+                        selected
+                    ) {
+                        dp(3)
+                    } else {
+                        dp(1)
+                    },
 
-                    base
-                }
-            )
-
-            cornerRadius =
-                dp(13)
-                    .toFloat()
-
-            setStroke(
-                if (selected) {
-                    dp(3)
-                } else {
-                    dp(1)
-                },
-
-                if (selected) {
-                    border
-                } else {
-                    Color.argb(
-                        45,
-                        80,
-                        80,
-                        80
-                    )
-                }
-            )
-        }
+                    if (
+                        selected
+                    ) {
+                        border
+                    } else {
+                        Color.argb(
+                            45,
+                            80,
+                            80,
+                            80
+                        )
+                    }
+                )
+            }
     }
 
     private fun buttonColor(
         id: String
-    ): Int {
-
-        return when (id) {
-
+    ): Int =
+        when (id) {
             "rita_sapo" ->
                 Color.parseColor(
                     "#E6D9F7"
@@ -697,14 +866,11 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
                     "#EEEEEE"
                 )
         }
-    }
 
     private fun buttonBorderColor(
         id: String
-    ): Int {
-
-        return when (id) {
-
+    ): Int =
+        when (id) {
             "rita_sapo" ->
                 Color.parseColor(
                     "#9270C5"
@@ -725,10 +891,6 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
                     "#E46F78"
                 )
 
-            /*
-             * Daniela:
-             * aro laranja pastel.
-             */
             "daniela_sapo" ->
                 Color.parseColor(
                     "#E7A15D"
@@ -744,16 +906,16 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
                     "#777777"
                 )
         }
-    }
 
     private fun darken(
         color: Int,
         factor: Float
     ): Int {
-
         val r =
             (
-                Color.red(color) *
+                Color.red(
+                    color
+                ) *
                     factor
                 )
                 .toInt()
@@ -764,7 +926,9 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
 
         val g =
             (
-                Color.green(color) *
+                Color.green(
+                    color
+                ) *
                     factor
                 )
                 .toInt()
@@ -775,7 +939,9 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
 
         val b =
             (
-                Color.blue(color) *
+                Color.blue(
+                    color
+                ) *
                     factor
                 )
                 .toInt()
@@ -792,15 +958,14 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     }
 
     private fun requestNotificationPermission() {
-
         if (
-            Build.VERSION.SDK_INT >= 33 &&
+            Build.VERSION.SDK_INT >=
+            33 &&
             checkSelfPermission(
                 Manifest.permission.POST_NOTIFICATIONS
             ) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-
             requestPermissions(
                 arrayOf(
                     Manifest.permission.POST_NOTIFICATIONS
@@ -815,7 +980,9 @@ class MainActivity : ComponentActivity(), Caixa6App.UnreadListener {
     ): Int =
         (
             value *
-                resources.displayMetrics.density
+                resources
+                    .displayMetrics
+                    .density
             )
             .toInt()
 }
