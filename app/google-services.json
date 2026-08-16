@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "937788873077",
+    "project_id": "central-de-emails-505312",
+    "storage_bucket": "central-de-emails-505312.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:937788873077:android:eac5819b98dc4e23c0db3c",
+        "android_client_info": {
+          "package_name": "pt.caixa6"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB6KBlkng301K7jhx3p0ciRZrW6e9KEpMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
