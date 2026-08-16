@@ -10,11 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
+import android.util.Log
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -24,7 +20,6 @@ import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebNotification
 import org.mozilla.geckoview.WebNotificationDelegate
-import java.util.concurrent.TimeUnit
 
 class Caixa6App : Application() {
 
@@ -63,7 +58,6 @@ class Caixa6App : Application() {
         }
 
         createNotificationChannel()
-        scheduleBackgroundWork()
     }
 
     private fun getRuntime(): GeckoRuntime {
@@ -92,18 +86,27 @@ class Caixa6App : Application() {
                 "resource://android/assets/sapo-monitor/",
                 "sapo-monitor@central-emails.local"
             )
-            .accept { extension ->
-                if (extension != null) {
-                    sapoExtension = extension
+            .accept(
+                { extension ->
+                    if (extension != null) {
+                        sapoExtension = extension
 
-                    val waiting = pendingMonitorSessions.toList()
-                    pendingMonitorSessions.clear()
+                        val waiting = pendingMonitorSessions.toList()
+                        pendingMonitorSessions.clear()
 
-                    waiting.forEach { (accountId, session) ->
-                        attachSapoMonitor(accountId, session, extension)
+                        waiting.forEach { (accountId, session) ->
+                            attachSapoMonitor(accountId, session, extension)
+                        }
                     }
+                },
+                { error ->
+                    Log.e(
+                        "CentralEmails",
+                        "Falha ao instalar monitor SAPO",
+                        error
+                    )
                 }
-            }
+            )
 
         runtime = newRuntime
         return newRuntime
@@ -137,13 +140,14 @@ class Caixa6App : Application() {
                     session: GeckoSession,
                     perm: GeckoSession.PermissionDelegate.ContentPermission
                 ): GeckoResult<Int> {
-                    val allowNotification =
+
+                    val allow =
                         perm.permission ==
                             GeckoSession.PermissionDelegate
                                 .PERMISSION_DESKTOP_NOTIFICATION
 
                     return GeckoResult.fromValue(
-                        if (allowNotification) {
+                        if (allow) {
                             GeckoSession.PermissionDelegate
                                 .ContentPermission.VALUE_ALLOW
                         } else {
@@ -163,6 +167,7 @@ class Caixa6App : Application() {
         } ?: pendingMonitorSessions.add(account.id to session)
 
         startBackgroundRefreshLoop()
+
         return session
     }
 
@@ -171,48 +176,51 @@ class Caixa6App : Application() {
         session: GeckoSession,
         extension: WebExtension
     ) {
-        session.webExtensionController.setMessageDelegate(
-            extension,
-            object : WebExtension.MessageDelegate {
-                override fun onMessage(
-                    nativeApp: String,
-                    message: Any,
-                    sender: WebExtension.MessageSender
-                ): GeckoResult<Any>? {
+        try {
+            session.webExtensionController.setMessageDelegate(
+                extension,
+                object : WebExtension.MessageDelegate {
+                    override fun onMessage(
+                        nativeApp: String,
+                        message: Any,
+                        sender: WebExtension.MessageSender
+                    ): GeckoResult<Any>? {
 
-                    if (
-                        nativeApp == "sapoMonitor" &&
-                        message is JSONObject &&
-                        message.optString("type") == "sapo_state"
-                    ) {
                         if (
-                            message.has("unread") &&
-                            !message.isNull("unread")
+                            nativeApp == "sapoMonitor" &&
+                            message is JSONObject &&
+                            message.optString("type") == "sapo_state"
                         ) {
-                            val unread = message.optInt("unread", -1)
+                            if (
+                                message.has("unread") &&
+                                !message.isNull("unread")
+                            ) {
+                                val unread = message.optInt("unread", -1)
 
-                            if (unread >= 0) {
-                                handler.post {
-                                    updateSapoUnread(accountId, unread)
+                                if (unread >= 0) {
+                                    handler.post {
+                                        updateSapoUnread(accountId, unread)
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    return null
-                }
-            },
-            "sapoMonitor"
-        )
+                        return null
+                    }
+                },
+                "sapoMonitor"
+            )
+        } catch (error: Exception) {
+            Log.e(
+                "CentralEmails",
+                "Falha ao ligar monitor à sessão $accountId",
+                error
+            )
+        }
     }
 
-    private fun updateSapoUnread(
-        accountId: String,
-        newCount: Int
-    ) {
-        val prefs =
-            getSharedPreferences("central-emails", MODE_PRIVATE)
-
+    private fun updateSapoUnread(accountId: String, newCount: Int) {
+        val prefs = getSharedPreferences("central-emails", MODE_PRIVATE)
         val baselineKey = "baseline_$accountId"
         val hadBaseline = prefs.getBoolean(baselineKey, false)
         val oldCount = unreadCounts[accountId] ?: 0
@@ -248,24 +256,16 @@ class Caixa6App : Application() {
         }
     }
 
-    private fun handleWebNotification(
-        notification: WebNotification
-    ) {
+    private fun handleWebNotification(notification: WebNotification) {
         val accountId = notificationHintAccount()
 
         lastWebNotificationAt[accountId] =
             SystemClock.elapsedRealtime()
 
-        val title =
-            notification.title ?: "Novo email"
-
-        val text =
-            notification.text ?: "Recebeste uma nova mensagem."
-
         showAccountNotification(
             accountId,
-            title,
-            text,
+            notification.title ?: "Novo email",
+            notification.text ?: "Recebeste uma nova mensagem.",
             notification.tag
         )
     }
@@ -333,33 +333,21 @@ class Caixa6App : Application() {
         unreadListeners.remove(listener)
     }
 
-    private fun notifyUnreadListeners(
-        accountId: String,
-        count: Int
-    ) {
+    private fun notifyUnreadListeners(accountId: String, count: Int) {
         unreadListeners.toList().forEach {
             it.onUnreadChanged(accountId, count)
         }
     }
 
-    private fun saveUnread(
-        accountId: String,
-        count: Int
-    ) {
-        getSharedPreferences(
-            "central-emails",
-            MODE_PRIVATE
-        )
+    private fun saveUnread(accountId: String, count: Int) {
+        getSharedPreferences("central-emails", MODE_PRIVATE)
             .edit()
             .putInt("unread_$accountId", count)
             .apply()
     }
 
     private fun loadUnread(accountId: String): Int =
-        getSharedPreferences(
-            "central-emails",
-            MODE_PRIVATE
-        )
+        getSharedPreferences("central-emails", MODE_PRIVATE)
             .getInt("unread_$accountId", 0)
 
     private fun startBackgroundRefreshLoop() {
@@ -388,13 +376,28 @@ class Caixa6App : Application() {
 
             handler.postDelayed(
                 ::refreshNextSapoSession,
-                45_000L
+                60_000L
             )
             return
         }
 
         val account = accounts[refreshIndex++]
-        val session = getOrCreateSession(account)
+
+        val session = try {
+            getOrCreateSession(account)
+        } catch (error: Exception) {
+            Log.e(
+                "CentralEmails",
+                "Falha ao criar sessão ${account.id}",
+                error
+            )
+
+            handler.postDelayed(
+                ::refreshNextSapoSession,
+                10_000L
+            )
+            return
+        }
 
         if (
             uiVisible &&
@@ -402,54 +405,16 @@ class Caixa6App : Application() {
         ) {
             handler.postDelayed(
                 ::refreshNextSapoSession,
-                4_000L
+                5_000L
             )
             return
         }
 
-        wakeSession(
-            account,
-            session,
-            14_000L
-        )
-
-        handler.postDelayed(
-            ::refreshNextSapoSession,
-            17_000L
-        )
-    }
-
-    private fun wakeSession(
-        account: Account,
-        session: GeckoSession,
-        activeForMs: Long
-    ) {
         try {
-            setNotificationHint(
-                account.id,
-                activeForMs + 10_000L
-            )
+            setNotificationHint(account.id, 30_000L)
 
             session.setActive(true)
-
-            val loadedKey =
-                "loaded_background_${account.id}"
-
-            val prefs =
-                getSharedPreferences(
-                    "central-emails",
-                    MODE_PRIVATE
-                )
-
-            if (!prefs.getBoolean(loadedKey, false)) {
-                session.loadUri(account.url)
-
-                prefs.edit()
-                    .putBoolean(loadedKey, true)
-                    .apply()
-            } else {
-                session.reload()
-            }
+            session.reload()
 
             handler.postDelayed({
                 try {
@@ -463,66 +428,20 @@ class Caixa6App : Application() {
                     }
                 } catch (_: Exception) {
                 }
-            }, activeForMs)
+            }, 15_000L)
 
-        } catch (_: Exception) {
-        }
-    }
-
-    fun refreshSapoFromWorker(onFinished: () -> Unit) {
-        handler.post {
-            val accounts =
-                DEFAULT_ACCOUNTS.filter {
-                    it.id != "rita_gmail"
-                }
-
-            fun next(index: Int) {
-                if (index >= accounts.size) {
-                    onFinished()
-                    return
-                }
-
-                val account = accounts[index]
-                val session = getOrCreateSession(account)
-
-                wakeSession(
-                    account,
-                    session,
-                    9_000L
-                )
-
-                handler.postDelayed(
-                    { next(index + 1) },
-                    11_000L
-                )
-            }
-
-            next(0)
-        }
-    }
-
-    private fun scheduleBackgroundWork() {
-        val constraints =
-            Constraints.Builder()
-                .setRequiredNetworkType(
-                    NetworkType.CONNECTED
-                )
-                .build()
-
-        val request =
-            PeriodicWorkRequestBuilder<MailRefreshWorker>(
-                15,
-                TimeUnit.MINUTES
+        } catch (error: Exception) {
+            Log.e(
+                "CentralEmails",
+                "Falha ao atualizar ${account.id}",
+                error
             )
-                .setConstraints(constraints)
-                .build()
+        }
 
-        WorkManager.getInstance(this)
-            .enqueueUniquePeriodicWork(
-                "central-emails-sapo-refresh",
-                ExistingPeriodicWorkPolicy.UPDATE,
-                request
-            )
+        handler.postDelayed(
+            ::refreshNextSapoSession,
+            20_000L
+        )
     }
 
     private fun accountLabel(accountId: String): String =
@@ -572,35 +491,24 @@ class Caixa6App : Application() {
 
         val builder =
             if (Build.VERSION.SDK_INT >= 26) {
-                Notification.Builder(
-                    this,
-                    "mail"
-                )
+                Notification.Builder(this, "mail")
             } else {
                 Notification.Builder(this)
             }
 
-        val notification =
+        val androidNotification =
             builder
-                .setSmallIcon(
-                    R.drawable.ic_mail
-                )
-                .setContentTitle(
-                    "$label — $titleText"
-                )
+                .setSmallIcon(R.drawable.ic_mail)
+                .setContentTitle("$label — $titleText")
                 .setContentText(body)
                 .setSubText(label)
                 .setStyle(
                     Notification.BigTextStyle()
                         .bigText(body)
                 )
-                .setContentIntent(
-                    pendingIntent
-                )
+                .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
-                .setGroup(
-                    "central_mail_$accountId"
-                )
+                .setGroup("central_mail_$accountId")
                 .build()
 
         manager.notify(
@@ -608,7 +516,7 @@ class Caixa6App : Application() {
                 "$accountId:$sourceTag:$titleText:$body:" +
                     System.currentTimeMillis()
             ).hashCode(),
-            notification
+            androidNotification
         )
     }
 
@@ -625,8 +533,7 @@ class Caixa6App : Application() {
                     "Central de Emails",
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    description =
-                        "Novos emails"
+                    description = "Novos emails"
                 }
             )
         }
