@@ -712,7 +712,66 @@ class Caixa6App : Application(), Configuration.Provider {
      * Se a Google exigir interação do utilizador (resolution), o worker
      * não abre qualquer janela e termina sem notificar.
      */
+    /*
+     * Guarda temporariamente o token que acabou de ser obtido enquanto a
+     * utilizadora está dentro da app. O worker tenta primeiro este token.
+     *
+     * O token Google é de curta duração; se deixar de ser válido, o worker
+     * tenta novamente a autorização silenciosa já concedida à aplicação.
+     */
+    fun rememberGmailAccessToken(token: String) {
+        getSharedPreferences(
+            "central-emails",
+            MODE_PRIVATE
+        )
+            .edit()
+            .putString(
+                "gmail_access_token_v2",
+                token
+            )
+            .apply()
+    }
+
+    private fun cachedGmailAccessToken(): String? =
+        getSharedPreferences(
+            "central-emails",
+            MODE_PRIVATE
+        )
+            .getString(
+                "gmail_access_token_v2",
+                null
+            )
+            ?.takeIf { it.isNotBlank() }
+
+    private fun clearCachedGmailAccessToken() {
+        getSharedPreferences(
+            "central-emails",
+            MODE_PRIVATE
+        )
+            .edit()
+            .remove("gmail_access_token_v2")
+            .apply()
+    }
+
     fun refreshGmailForWorker(
+        onFinished: () -> Unit
+    ) {
+        val cached =
+            cachedGmailAccessToken()
+
+        if (cached != null) {
+            refreshGmailWithToken(
+                cached,
+                retryAuthorizationOnFailure = true,
+                onFinished = onFinished
+            )
+            return
+        }
+
+        authorizeGmailSilently(onFinished)
+    }
+
+    private fun authorizeGmailSilently(
         onFinished: () -> Unit
     ) {
         val request =
@@ -728,7 +787,16 @@ class Caixa6App : Application(), Configuration.Provider {
             .authorize(request)
             .addOnSuccessListener { result ->
 
+                /*
+                 * Um Worker não pode abrir a janela de consentimento.
+                 * Se a Google exigir interação, a autorização será renovada
+                 * na próxima vez que a utilizadora abrir o separador Gmail.
+                 */
                 if (result.hasResolution()) {
+                    Log.w(
+                        "CentralEmails",
+                        "Gmail background: Google exige interação."
+                    )
                     onFinished()
                     return@addOnSuccessListener
                 }
@@ -741,40 +809,13 @@ class Caixa6App : Application(), Configuration.Provider {
                     return@addOnSuccessListener
                 }
 
-                Thread {
-                    try {
-                        val json =
-                            gmailApiGet(
-                                token,
-                                "https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX"
-                            )
+                rememberGmailAccessToken(token)
 
-                        val current =
-                            JSONObject(json)
-                                .optInt(
-                                    "messagesUnread",
-                                    0
-                                )
-
-                        handler.post {
-                            updateGmailBackgroundCount(
-                                current
-                            )
-                            onFinished()
-                        }
-
-                    } catch (error: Exception) {
-                        Log.e(
-                            "CentralEmails",
-                            "Worker Gmail",
-                            error
-                        )
-
-                        handler.post {
-                            onFinished()
-                        }
-                    }
-                }.start()
+                refreshGmailWithToken(
+                    token,
+                    retryAuthorizationOnFailure = false,
+                    onFinished = onFinished
+                )
             }
             .addOnFailureListener { error ->
                 Log.e(
@@ -786,8 +827,99 @@ class Caixa6App : Application(), Configuration.Provider {
             }
     }
 
-    private fun updateGmailBackgroundCount(
-        current: Int
+    private fun refreshGmailWithToken(
+        token: String,
+        retryAuthorizationOnFailure: Boolean,
+        onFinished: () -> Unit
+    ) {
+        Thread {
+            try {
+                /*
+                 * 1) Contador real de não lidos da INBOX.
+                 */
+                val labelJson =
+                    gmailApiGet(
+                        token,
+                        "https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX"
+                    )
+
+                val currentUnread =
+                    JSONObject(labelJson)
+                        .optInt(
+                            "messagesUnread",
+                            0
+                        )
+
+                /*
+                 * 2) IDs dos emails que estão simultaneamente:
+                 *    - na Caixa de Entrada;
+                 *    - por ler.
+                 *
+                 * Isto evita depender apenas do contador. Se entrar um email
+                 * novo e outro for marcado como lido, o total pode ficar igual;
+                 * comparando IDs continuamos a detetar o email novo.
+                 */
+                val unreadJson =
+                    gmailApiGet(
+                        token,
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages" +
+                            "?labelIds=INBOX&q=is%3Aunread&maxResults=100"
+                    )
+
+                val root =
+                    JSONObject(unreadJson)
+
+                val array =
+                    root.optJSONArray("messages")
+
+                val currentIds =
+                    linkedSetOf<String>()
+
+                if (array != null) {
+                    for (i in 0 until array.length()) {
+                        val id =
+                            array
+                                .optJSONObject(i)
+                                ?.optString("id", "")
+                                .orEmpty()
+
+                        if (id.isNotBlank()) {
+                            currentIds.add(id)
+                        }
+                    }
+                }
+
+                handler.post {
+                    updateGmailBackgroundState(
+                        currentUnread,
+                        currentIds
+                    )
+                    onFinished()
+                }
+
+            } catch (error: Exception) {
+                Log.e(
+                    "CentralEmails",
+                    "Worker Gmail",
+                    error
+                )
+
+                clearCachedGmailAccessToken()
+
+                handler.post {
+                    if (retryAuthorizationOnFailure) {
+                        authorizeGmailSilently(onFinished)
+                    } else {
+                        onFinished()
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun updateGmailBackgroundState(
+        currentUnread: Int,
+        currentIds: Set<String>
     ) {
         val prefs =
             getSharedPreferences(
@@ -796,10 +928,10 @@ class Caixa6App : Application(), Configuration.Provider {
             )
 
         val baselineKey =
-            "gmail_worker_baseline_v1"
+            "gmail_worker_ids_baseline_v2"
 
-        val countKey =
-            "gmail_worker_unread_v1"
+        val idsKey =
+            "gmail_worker_unread_ids_v2"
 
         val hadBaseline =
             prefs.getBoolean(
@@ -807,31 +939,37 @@ class Caixa6App : Application(), Configuration.Provider {
                 false
             )
 
-        val previous =
-            prefs.getInt(
-                countKey,
-                current
+        val previousIds =
+            prefs.getStringSet(
+                idsKey,
+                emptySet()
             )
+                ?.toSet()
+                ?: emptySet()
+
+        val newIds =
+            if (hadBaseline) {
+                currentIds - previousIds
+            } else {
+                emptySet()
+            }
 
         prefs.edit()
             .putBoolean(
                 baselineKey,
                 true
             )
-            .putInt(
-                countKey,
-                current
+            .putStringSet(
+                idsKey,
+                currentIds.toSet()
             )
             .apply()
 
-        setGmailUnread(current)
+        setGmailUnread(currentUnread)
 
-        if (
-            hadBaseline &&
-            current > previous
-        ) {
+        if (newIds.isNotEmpty()) {
             val difference =
-                current - previous
+                newIds.size
 
             showAccountNotification(
                 "rita_gmail",
@@ -840,7 +978,11 @@ class Caixa6App : Application(), Configuration.Provider {
                 } else {
                     "$difference novos emails"
                 },
-                "Tens $current emails por ler na Caixa de Entrada."
+                if (currentUnread == 1) {
+                    "Tens 1 email por ler na Caixa de Entrada."
+                } else {
+                    "Tens $currentUnread emails por ler na Caixa de Entrada."
+                }
             )
         }
     }

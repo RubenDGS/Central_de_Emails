@@ -609,6 +609,8 @@ class MainActivity :
                             )
 
                     } else {
+                        app.rememberGmailAccessToken(token)
+
                         gmailPanel
                             .setAuthorizedToken(
                                 token
