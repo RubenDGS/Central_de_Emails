@@ -1033,13 +1033,22 @@ class GmailPanel(
                 ignoreCase = true
             )
         ) {
-            html.replaceFirst(
+            val headRegex =
                 Regex(
                     "<head[^>]*>",
                     RegexOption.IGNORE_CASE
                 )
-            ) {
-                "${it.value}$viewport$safetyCss"
+
+            val match =
+                headRegex.find(html)
+
+            if (match != null) {
+                html.replaceRange(
+                    match.range,
+                    "${match.value}$viewport$safetyCss"
+                )
+            } else {
+                "<html><head>$viewport$safetyCss</head><body>$html</body></html>"
             }
         } else {
             "<html><head>$viewport$safetyCss</head><body>$html</body></html>"
