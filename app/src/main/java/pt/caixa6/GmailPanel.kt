@@ -15,6 +15,9 @@ import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -38,6 +41,11 @@ class GmailPanel(
     private val requestAuthorization: () -> Unit,
     private val requestAttachments: () -> Unit
 ) : LinearLayout(context) {
+
+    private class GmailUnauthorizedException(
+        val expiredToken: String
+    ) : IllegalStateException("Sessão Google expirada")
+
 
     data class GmailRow(
         val id: String,
@@ -258,6 +266,7 @@ class GmailPanel(
 
     fun setAuthorizedToken(token: String) {
         accessToken = token
+        app.rememberGmailAccessToken(token)
         loadLabels()
         loadCurrentFolder()
     }
@@ -559,10 +568,8 @@ class GmailPanel(
 
             } catch (e: Exception) {
                 post {
-                    showAuthorizationError(
-                        "Erro do Gmail: " +
-                            (e.message ?: "erro desconhecido")
-                    )
+                    progress.visibility = View.GONE
+                    handleApiError(e)
                 }
             }
         }.start()
@@ -806,17 +813,28 @@ class GmailPanel(
                 val row =
                     parseMetadata(message)
 
-                val body =
-                    extractBody(
-                        message.getJSONObject(
-                            "payload"
-                        )
+                val payload =
+                    message.getJSONObject(
+                        "payload"
                     )
+
+                val htmlBody =
+                    extractHtmlBody(payload)
+
+                val body =
+                    extractBody(payload)
                         .ifBlank {
-                            message.optString(
-                                "snippet",
-                                "Sem conteúdo disponível."
-                            )
+                            if (htmlBody.isNotBlank()) {
+                                Html.fromHtml(
+                                    htmlBody,
+                                    Html.FROM_HTML_MODE_LEGACY
+                                ).toString()
+                            } else {
+                                message.optString(
+                                    "snippet",
+                                    "Sem conteúdo disponível."
+                                )
+                            }
                         }
 
                 if (row.unread) {
@@ -832,7 +850,8 @@ class GmailPanel(
                     progress.visibility = View.GONE
                     showMessageDialog(
                         row.copy(unread = false),
-                        body
+                        body,
+                        htmlBody
                     )
                     loadCurrentFolder(
                         searchBox.text
@@ -852,18 +871,20 @@ class GmailPanel(
 
     private fun showMessageDialog(
         row: GmailRow,
-        body: String
+        body: String,
+        htmlBody: String
     ) {
         val content =
             LinearLayout(context).apply {
                 orientation = VERTICAL
-                setPadding(28, 10, 28, 10)
+                setPadding(20, 8, 20, 8)
             }
 
         val header =
             TextView(context).apply {
-                textSize = 16f
+                textSize = 15f
                 setTextIsSelectable(true)
+                setPadding(4, 4, 4, 10)
                 text =
                     buildString {
                         append(row.subject)
@@ -879,28 +900,77 @@ class GmailPanel(
                     }
             }
 
-        val bodyView =
-            TextView(context).apply {
-                textSize = 16f
-                setTextIsSelectable(true)
-                setPadding(0, 18, 0, 18)
-                text = body
-            }
-
-        val scroll =
-            ScrollView(context).apply {
-                addView(bodyView)
-            }
-
         content.addView(header)
-        content.addView(
-            scroll,
-            LayoutParams(
-                LayoutParams.MATCH_PARENT,
-                0,
-                1f
+
+        if (htmlBody.isNotBlank()) {
+            /*
+             * Mostra o HTML original do email em vez de o converter
+             * todo para texto simples. Assim preservamos negritos,
+             * itálicos, tamanhos, tabelas, cores e a maior parte do
+             * aspeto original da mensagem.
+             *
+             * JavaScript fica desligado por segurança.
+             */
+            val webView =
+                WebView(context).apply {
+                    setBackgroundColor(Color.WHITE)
+
+                    settings.javaScriptEnabled = false
+                    settings.domStorageEnabled = false
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    settings.mixedContentMode =
+                        WebSettings.MIXED_CONTENT_NEVER_ALLOW
+
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false
+
+                    webViewClient =
+                        object : WebViewClient() {}
+
+                    loadDataWithBaseURL(
+                        "https://mail.google.com/",
+                        prepareEmailHtml(htmlBody),
+                        "text/html",
+                        "UTF-8",
+                        null
+                    )
+                }
+
+            content.addView(
+                webView,
+                LayoutParams(
+                    LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
             )
-        )
+
+        } else {
+            val bodyView =
+                TextView(context).apply {
+                    textSize = 16f
+                    setTextIsSelectable(true)
+                    setPadding(4, 10, 4, 16)
+                    text = body
+                }
+
+            val scroll =
+                ScrollView(context).apply {
+                    addView(bodyView)
+                }
+
+            content.addView(
+                scroll,
+                LayoutParams(
+                    LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+        }
 
         AlertDialog.Builder(context)
             .setTitle("Rita Gmail")
@@ -919,6 +989,61 @@ class GmailPanel(
             }
             .setNegativeButton("Fechar", null)
             .show()
+    }
+
+    private fun prepareEmailHtml(
+        html: String
+    ): String {
+        val viewport =
+            if (
+                html.contains(
+                    "name=\"viewport\"",
+                    ignoreCase = true
+                ) ||
+                html.contains(
+                    "name='viewport'",
+                    ignoreCase = true
+                )
+            ) {
+                ""
+            } else {
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+            }
+
+        val safetyCss =
+            """
+            <style>
+                html, body {
+                    max-width: 100% !important;
+                    overflow-wrap: anywhere;
+                }
+                img {
+                    max-width: 100% !important;
+                    height: auto !important;
+                }
+                table {
+                    max-width: 100% !important;
+                }
+            </style>
+            """.trimIndent()
+
+        return if (
+            html.contains(
+                "<head",
+                ignoreCase = true
+            )
+        ) {
+            html.replaceFirst(
+                Regex(
+                    "<head[^>]*>",
+                    RegexOption.IGNORE_CASE
+                )
+            ) {
+                "${it.value}$viewport$safetyCss"
+            }
+        } else {
+            "<html><head>$viewport$safetyCss</head><body>$html</body></html>"
+        }
     }
 
     private fun showSingleActions(
@@ -1899,6 +2024,56 @@ class GmailPanel(
         )
     }
 
+    private fun extractHtmlBody(
+        part: JSONObject
+    ): String {
+        val mime =
+            part.optString("mimeType")
+
+        val data =
+            part.optJSONObject("body")
+                ?.optString(
+                    "data",
+                    ""
+                )
+                ?: ""
+
+        if (
+            data.isNotBlank() &&
+            mime.equals(
+                "text/html",
+                true
+            )
+        ) {
+            return String(
+                Base64.decode(
+                    data,
+                    Base64.URL_SAFE or
+                        Base64.NO_WRAP or
+                        Base64.NO_PADDING
+                ),
+                Charsets.UTF_8
+            )
+        }
+
+        val parts =
+            part.optJSONArray("parts")
+                ?: return ""
+
+        for (i in 0 until parts.length()) {
+            val result =
+                extractHtmlBody(
+                    parts.getJSONObject(i)
+                )
+
+            if (result.isNotBlank()) {
+                return result
+            }
+        }
+
+        return ""
+    }
+
     private fun extractBody(
         part: JSONObject
     ): String {
@@ -2052,6 +2227,12 @@ class GmailPanel(
         connection.disconnect()
 
         if (
+            code == 401
+        ) {
+            throw GmailUnauthorizedException(token)
+        }
+
+        if (
             code !in 200..299
         ) {
             throw IllegalStateException(
@@ -2062,9 +2243,50 @@ class GmailPanel(
         return result
     }
 
+    private fun handleApiError(
+        error: Exception
+    ) {
+        if (
+            error is GmailUnauthorizedException
+        ) {
+            val expiredToken =
+                error.expiredToken
+
+            accessToken = null
+
+            status.text =
+                "A renovar a autorização do Gmail…"
+
+            /*
+             * O 401 significa token expirado/inválido.
+             * Limpamos a cache do Google Identity Services antes
+             * de pedir um novo token; assim evitamos receber de novo
+             * o mesmo token já inválido.
+             */
+            app.clearGmailAccessToken(
+                expiredToken
+            ) {
+                post {
+                    requestAuthorization()
+                }
+            }
+
+            return
+        }
+
+        toastError(error)
+    }
+
     private fun toastError(
         error: Exception
     ) {
+        if (
+            error is GmailUnauthorizedException
+        ) {
+            handleApiError(error)
+            return
+        }
+
         Toast.makeText(
             context,
             "Erro Gmail: " +

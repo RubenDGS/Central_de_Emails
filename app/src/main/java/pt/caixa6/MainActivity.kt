@@ -495,6 +495,15 @@ class MainActivity :
             account.url
         )
 
+        /*
+         * Se o SAPO cair numa página de erro de rede/DNS, a app tenta
+         * recuperar automaticamente a mesma sessão sem perder o login.
+         */
+        app.monitorSapoUiLoad(
+            account,
+            session
+        )
+
         updateSelectedButton(
             account.id
         )

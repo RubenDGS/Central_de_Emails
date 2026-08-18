@@ -8,6 +8,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +22,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.ClearTokenRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import org.json.JSONObject
@@ -36,6 +39,12 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 
 class Caixa6App : Application(), Configuration.Provider {
+
+    private class GmailApiException(
+        val httpCode: Int,
+        message: String
+    ) : IllegalStateException(message)
+
 
     companion object {
         const val GMAIL_MODIFY =
@@ -82,6 +91,21 @@ class Caixa6App : Application(), Configuration.Provider {
 
     private val unreadListeners =
         mutableSetOf<UnreadListener>()
+
+    /*
+     * Última vez em que o monitor SAPO conseguiu realmente ler a INBOX.
+     * Serve para distinguir uma página SAPO carregada de uma página de erro
+     * do GeckoView (DNS/rede/etc.).
+     */
+    private val sapoLastStateAt =
+        mutableMapOf<String, Long>()
+
+    /*
+     * Geração das tentativas de recuperação visíveis.
+     * Ao abrir novamente uma conta, as tentativas antigas deixam de ter efeito.
+     */
+    private val sapoUiRecoveryGeneration =
+        mutableMapOf<String, Int>()
 
     override fun onCreate() {
         super.onCreate()
@@ -261,8 +285,6 @@ class Caixa6App : Application(), Configuration.Provider {
             account.id to session
         )
 
-        startFastLoop()
-
         return session
     }
 
@@ -298,6 +320,11 @@ class Caixa6App : Application(), Configuration.Provider {
 
                                 if (unread >= 0) {
                                     handler.post {
+                                        sapoLastStateAt[
+                                            accountId
+                                        ] =
+                                            SystemClock.elapsedRealtime()
+
                                         updateSapoUnread(
                                             accountId,
                                             unread
@@ -456,11 +483,15 @@ class Caixa6App : Application(), Configuration.Provider {
     }
 
     fun setUiVisible(visible: Boolean) {
+        /*
+         * Em versões anteriores, ao fechar a interface era iniciado um ciclo
+         * que acordava/recarregava continuamente as cinco contas SAPO.
+         * Além de gastar recursos, isso podia deixar algumas sessões no erro
+         * "mail.sapo.pt could not be found".
+         *
+         * Em background usamos apenas o WorkManager de 15 minutos.
+         */
         uiVisible = visible
-
-        if (!visible) {
-            startFastLoop()
-        }
     }
 
     fun getUnread(accountId: String): Int =
@@ -537,6 +568,205 @@ class Caixa6App : Application(), Configuration.Provider {
                 "unread_$accountId",
                 0
             )
+
+    private fun hasValidatedNetwork(): Boolean {
+        return try {
+            val manager =
+                getSystemService(
+                    ConnectivityManager::class.java
+                )
+
+            val network =
+                manager.activeNetwork
+                    ?: return false
+
+            val capabilities =
+                manager.getNetworkCapabilities(
+                    network
+                )
+                    ?: return false
+
+            capabilities.hasCapability(
+                NetworkCapabilities.NET_CAPABILITY_INTERNET
+            ) &&
+                capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                )
+
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /*
+     * Chamado pela MainActivity depois de abrir uma conta SAPO.
+     *
+     * Se o monitor não conseguir responder (por exemplo, porque o GeckoView
+     * mostrou a página "mail.sapo.pt could not be found"), a sessão é tentada
+     * novamente quando existe ligação validada. Não apaga cookies nem logins.
+     */
+    fun monitorSapoUiLoad(
+        account: Account,
+        session: GeckoSession
+    ) {
+        val generation =
+            (
+                sapoUiRecoveryGeneration[
+                    account.id
+                ] ?: 0
+                ) + 1
+
+        sapoUiRecoveryGeneration[
+            account.id
+        ] = generation
+
+        val before =
+            sapoLastStateAt[
+                account.id
+            ] ?: 0L
+
+        fun check(attempt: Int) {
+            handler.postDelayed(
+                {
+                    if (
+                        sapoUiRecoveryGeneration[
+                            account.id
+                        ] != generation
+                    ) {
+                        return@postDelayed
+                    }
+
+                    val fresh =
+                        (
+                            sapoLastStateAt[
+                                account.id
+                            ] ?: 0L
+                            ) > before
+
+                    if (fresh) {
+                        return@postDelayed
+                    }
+
+                    if (
+                        !uiVisible ||
+                        selectedAccountId !=
+                        account.id
+                    ) {
+                        return@postDelayed
+                    }
+
+                    if (hasValidatedNetwork()) {
+                        try {
+                            session.setActive(true)
+
+                            if (attempt == 0) {
+                                session.reload()
+                            } else {
+                                session.loadUri(
+                                    account.url
+                                )
+                            }
+                        } catch (error: Exception) {
+                            Log.e(
+                                "CentralEmails",
+                                "Recuperação SAPO visível ${account.id}",
+                                error
+                            )
+                        }
+                    }
+
+                    if (attempt < 3) {
+                        check(attempt + 1)
+                    }
+                },
+                5_000L
+            )
+        }
+
+        check(0)
+    }
+
+    private fun deactivateSapoSession(
+        accountId: String,
+        session: GeckoSession
+    ) {
+        try {
+            if (
+                !(
+                    uiVisible &&
+                    selectedAccountId ==
+                    accountId
+                    )
+            ) {
+                session.setActive(false)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /*
+     * Só é usado em background. Recria uma sessão que não conseguiu produzir
+     * qualquer estado SAPO após load + reload. O contextId é o mesmo, portanto
+     * a conta continua no mesmo contexto de cookies/storage do GeckoRuntime.
+     *
+     * Nunca substituímos por baixo do GeckoView a sessão que está visível.
+     */
+    private fun recoverSapoSessionInBackground(
+        account: Account
+    ) {
+        if (
+            uiVisible &&
+            selectedAccountId ==
+            account.id
+        ) {
+            return
+        }
+
+        val old =
+            sessions.remove(
+                account.id
+            )
+
+        pendingMonitorSessions
+            .removeAll {
+                it.first ==
+                    account.id
+            }
+
+        try {
+            old?.close()
+        } catch (_: Exception) {
+        }
+
+        try {
+            val replacement =
+                getOrCreateSession(
+                    account
+                )
+
+            replacement.setActive(true)
+            replacement.loadUri(
+                account.url
+            )
+
+            handler.postDelayed(
+                {
+                    deactivateSapoSession(
+                        account.id,
+                        replacement
+                    )
+                },
+                8_000L
+            )
+
+        } catch (error: Exception) {
+            Log.e(
+                "CentralEmails",
+                "Não foi possível recriar sessão SAPO ${account.id}",
+                error
+            )
+        }
+    }
 
     private fun startFastLoop() {
         if (refreshRunning) return
@@ -663,8 +893,14 @@ class Caixa6App : Application(), Configuration.Provider {
             val accounts =
                 DEFAULT_ACCOUNTS
                     .filter {
-                        it.id != "rita_gmail"
+                        it.id !=
+                            "rita_gmail"
                     }
+
+            if (!hasValidatedNetwork()) {
+                onFinished()
+                return@post
+            }
 
             fun next(index: Int) {
                 if (index >= accounts.size) {
@@ -673,32 +909,139 @@ class Caixa6App : Application(), Configuration.Provider {
                 }
 
                 val account =
-                    accounts[index]
+                    accounts[
+                        index
+                    ]
+
+                val before =
+                    sapoLastStateAt[
+                        account.id
+                    ] ?: 0L
+
+                val session =
+                    try {
+                        getOrCreateSession(
+                            account
+                        )
+                    } catch (error: Exception) {
+                        Log.e(
+                            "CentralEmails",
+                            "Worker SAPO ${account.id}",
+                            error
+                        )
+
+                        next(index + 1)
+                        return
+                    }
 
                 try {
-                    val session =
-                        getOrCreateSession(account)
-
-                    wake(
-                        account,
-                        session,
-                        9_000L
+                    setHint(
+                        account.id,
+                        20_000L
                     )
+
+                    session.setActive(
+                        true
+                    )
+
+                    /*
+                     * loadUri, em vez de uma cadeia de reloads contínuos.
+                     * Cada conta tem a sua oportunidade de carregar a INBOX.
+                     */
+                    session.loadUri(
+                        account.url
+                    )
+
                 } catch (error: Exception) {
                     Log.e(
                         "CentralEmails",
-                        "Worker SAPO ${account.id}",
+                        "Load SAPO worker ${account.id}",
                         error
                     )
                 }
 
+                /*
+                 * Damos 6,5 s para a extensão confirmar que leu a INBOX.
+                 * Se não houver resposta, fazemos um único reload.
+                 */
                 handler.postDelayed(
                     {
-                        next(
-                            index + 1
+                        val firstSucceeded =
+                            (
+                                sapoLastStateAt[
+                                    account.id
+                                ] ?: 0L
+                                ) > before
+
+                        if (firstSucceeded) {
+                            deactivateSapoSession(
+                                account.id,
+                                session
+                            )
+
+                            next(
+                                index + 1
+                            )
+
+                            return@postDelayed
+                        }
+
+                        if (!hasValidatedNetwork()) {
+                            deactivateSapoSession(
+                                account.id,
+                                session
+                            )
+
+                            next(
+                                index + 1
+                            )
+
+                            return@postDelayed
+                        }
+
+                        try {
+                            session.reload()
+                        } catch (error: Exception) {
+                            Log.e(
+                                "CentralEmails",
+                                "Reload SAPO worker ${account.id}",
+                                error
+                            )
+                        }
+
+                        /*
+                         * Mais 4,5 s. Se continuar sem qualquer estado,
+                         * consideramos a sessão presa numa página de erro e
+                         * recriamo-la em background.
+                         */
+                        handler.postDelayed(
+                            {
+                                val secondSucceeded =
+                                    (
+                                        sapoLastStateAt[
+                                            account.id
+                                        ] ?: 0L
+                                        ) > before
+
+                                deactivateSapoSession(
+                                    account.id,
+                                    session
+                                )
+
+                                if (!secondSucceeded) {
+                                    recoverSapoSessionInBackground(
+                                        account
+                                    )
+                                }
+
+                                next(
+                                    index + 1
+                                )
+                            },
+                            4_500L
                         )
                     },
-                    11_000L
+                    6_500L
                 )
             }
 
@@ -730,6 +1073,24 @@ class Caixa6App : Application(), Configuration.Provider {
                 token
             )
             .apply()
+    }
+
+    fun clearGmailAccessToken(
+        token: String,
+        onFinished: () -> Unit = {}
+    ) {
+        clearCachedGmailAccessToken()
+
+        val request =
+            ClearTokenRequest.builder()
+                .setToken(token)
+                .build()
+
+        Identity.getAuthorizationClient(this)
+            .clearToken(request)
+            .addOnCompleteListener {
+                onFinished()
+            }
     }
 
     private fun cachedGmailAccessToken(): String? =
@@ -904,12 +1265,27 @@ class Caixa6App : Application(), Configuration.Provider {
                     error
                 )
 
-                clearCachedGmailAccessToken()
-
-                handler.post {
-                    if (retryAuthorizationOnFailure) {
-                        authorizeGmailSilently(onFinished)
-                    } else {
+                if (
+                    error is GmailApiException &&
+                    error.httpCode == 401
+                ) {
+                    /*
+                     * O token expirou/ficou inválido.
+                     * Limpamos também a cache do Google Identity Services;
+                     * caso contrário authorize() pode voltar a entregar
+                     * o mesmo token inválido.
+                     */
+                    clearGmailAccessToken(token) {
+                        handler.post {
+                            if (retryAuthorizationOnFailure) {
+                                authorizeGmailSilently(onFinished)
+                            } else {
+                                onFinished()
+                            }
+                        }
+                    }
+                } else {
+                    handler.post {
                         onFinished()
                     }
                 }
@@ -1031,8 +1407,9 @@ class Caixa6App : Application(), Configuration.Provider {
         if (
             code !in 200..299
         ) {
-            throw IllegalStateException(
-                "Gmail HTTP $code"
+            throw GmailApiException(
+                code,
+                "Gmail HTTP $code: $result"
             )
         }
 

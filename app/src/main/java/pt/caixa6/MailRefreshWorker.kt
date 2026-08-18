@@ -26,7 +26,7 @@ class MailRefreshWorker(
         }
 
         sapoLatch.await(
-            70,
+            75,
             TimeUnit.SECONDS
         )
 
