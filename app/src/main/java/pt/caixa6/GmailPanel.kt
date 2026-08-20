@@ -2,6 +2,7 @@ package pt.caixa6
 
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -15,6 +16,7 @@ import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -928,7 +930,35 @@ class GmailPanel(
                     settings.displayZoomControls = false
 
                     webViewClient =
-                        object : WebViewClient() {}
+                        object : WebViewClient() {
+
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                val uri =
+                                    request?.url
+                                        ?: return false
+
+                                return openEmailLink(
+                                    uri.toString()
+                                )
+                            }
+
+                            @Suppress("DEPRECATION")
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                url: String?
+                            ): Boolean {
+                                val target =
+                                    url
+                                        ?: return false
+
+                                return openEmailLink(
+                                    target
+                                )
+                            }
+                        }
 
                     loadDataWithBaseURL(
                         "https://mail.google.com/",
@@ -1027,8 +1057,25 @@ class GmailPanel(
             </style>
             """.trimIndent()
 
+        val clickableHtml =
+            html
+                .replace(
+                    Regex(
+                        """target\s*=\s*["']_blank["']""",
+                        RegexOption.IGNORE_CASE
+                    ),
+                    "target=\"_self\""
+                )
+                .replace(
+                    Regex(
+                        """target\s*=\s*["']_new["']""",
+                        RegexOption.IGNORE_CASE
+                    ),
+                    "target=\"_self\""
+                )
+
         return if (
-            html.contains(
+            clickableHtml.contains(
                 "<head",
                 ignoreCase = true
             )
@@ -1040,18 +1087,61 @@ class GmailPanel(
                 )
 
             val match =
-                headRegex.find(html)
+                headRegex.find(clickableHtml)
 
             if (match != null) {
-                html.replaceRange(
+                clickableHtml.replaceRange(
                     match.range,
                     "${match.value}$viewport$safetyCss"
                 )
             } else {
-                "<html><head>$viewport$safetyCss</head><body>$html</body></html>"
+                "<html><head>$viewport$safetyCss</head><body>$clickableHtml</body></html>"
             }
         } else {
-            "<html><head>$viewport$safetyCss</head><body>$html</body></html>"
+            "<html><head>$viewport$safetyCss</head><body>$clickableHtml</body></html>"
+        }
+    }
+
+    private fun openEmailLink(
+        url: String
+    ): Boolean {
+        return try {
+            val uri =
+                Uri.parse(url)
+
+            when (
+                uri.scheme
+                    ?.lowercase()
+            ) {
+                "http",
+                "https",
+                "mailto",
+                "tel" -> {
+                    val intent =
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            uri
+                        )
+
+                    context.startActivity(
+                        intent
+                    )
+
+                    true
+                }
+
+                else ->
+                    false
+            }
+
+        } catch (error: Exception) {
+            Toast.makeText(
+                context,
+                "Não foi possível abrir esta ligação.",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            true
         }
     }
 
