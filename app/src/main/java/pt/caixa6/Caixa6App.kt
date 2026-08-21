@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -26,6 +27,7 @@ import com.google.android.gms.auth.api.identity.ClearTokenRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import org.json.JSONObject
+import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
@@ -243,6 +245,77 @@ class Caixa6App : Application(), Configuration.Provider {
 
                 override fun onKill(session: GeckoSession) {
                     forgetSession(account.id)
+                }
+            }
+        )
+
+        /*
+         * Hiperligações SAPO.
+         *
+         * O SAPO usa frequentemente target="_blank"/window.open() nos links
+         * que vêm dentro dos emails. Sem NavigationDelegate, esse pedido pode
+         * falhar porque a app não fornece uma segunda janela GeckoView.
+         *
+         * - navegação normal continua dentro da própria sessão SAPO;
+         * - links para uma "nova janela" abrem no navegador/app adequado;
+         * - mailto: e tel: também são entregues ao Android.
+         */
+        session.setNavigationDelegate(
+            object : GeckoSession.NavigationDelegate {
+
+                override fun onLoadRequest(
+                    session: GeckoSession,
+                    request:
+                        GeckoSession.NavigationDelegate.LoadRequest
+                ): GeckoResult<AllowOrDeny>? {
+
+                    val uri =
+                        request.uri
+
+                    val scheme =
+                        try {
+                            Uri.parse(uri)
+                                .scheme
+                                ?.lowercase()
+                        } catch (_: Exception) {
+                            null
+                        }
+
+                    if (
+                        request.hasUserGesture &&
+                        (
+                            scheme == "mailto" ||
+                            scheme == "tel"
+                            )
+                    ) {
+                        openExternalUri(uri)
+
+                        return GeckoResult.fromValue(
+                            AllowOrDeny.DENY
+                        )
+                    }
+
+                    /*
+                     * GeckoView encaminharia TARGET_WINDOW_NEW para
+                     * onNewSession(). Tratamos aí para não perder links
+                     * target="_blank" nem botões/imagens clicáveis.
+                     */
+                    return null
+                }
+
+                override fun onNewSession(
+                    session: GeckoSession,
+                    uri: String
+                ): GeckoResult<GeckoSession>? {
+
+                    openExternalUri(uri)
+
+                    /*
+                     * Devolvemos null intencionalmente porque o link já foi
+                     * tratado pelo Android e não queremos criar uma segunda
+                     * janela Gecko invisível.
+                     */
+                    return null
                 }
             }
         )
@@ -1443,6 +1516,47 @@ class Caixa6App : Application(), Configuration.Provider {
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
+    }
+
+    private fun openExternalUri(
+        rawUri: String
+    ) {
+        try {
+            val uri =
+                Uri.parse(rawUri)
+
+            val scheme =
+                uri.scheme
+                    ?.lowercase()
+
+            if (
+                scheme != "http" &&
+                scheme != "https" &&
+                scheme != "mailto" &&
+                scheme != "tel"
+            ) {
+                return
+            }
+
+            val intent =
+                Intent(
+                    Intent.ACTION_VIEW,
+                    uri
+                ).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
+                }
+
+            startActivity(intent)
+
+        } catch (error: Exception) {
+            Log.e(
+                "CentralEmails",
+                "Não foi possível abrir hiperligação SAPO: $rawUri",
+                error
+            )
+        }
     }
 
     private fun accountLabel(
