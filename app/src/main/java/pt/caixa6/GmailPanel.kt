@@ -879,63 +879,143 @@ class GmailPanel(
         val content =
             LinearLayout(context).apply {
                 orientation = VERTICAL
-                setPadding(20, 8, 20, 8)
+                setPadding(
+                    18,
+                    8,
+                    18,
+                    8
+                )
             }
 
-        val header =
+        val subjectView =
             TextView(context).apply {
-                textSize = 15f
-                setTextIsSelectable(true)
-                setPadding(4, 4, 4, 10)
+                text =
+                    row.subject
+                textSize =
+                    20f
+                setTypeface(
+                    typeface,
+                    Typeface.BOLD
+                )
+                setTextColor(
+                    Color.rgb(
+                        32,
+                        33,
+                        36
+                    )
+                )
+                setTextIsSelectable(
+                    true
+                )
+                setPadding(
+                    4,
+                    4,
+                    4,
+                    12
+                )
+            }
+
+        val fromView =
+            TextView(context).apply {
+                textSize =
+                    14f
+                setTextColor(
+                    Color.rgb(
+                        80,
+                        80,
+                        80
+                    )
+                )
+                setTextIsSelectable(
+                    true
+                )
                 text =
                     buildString {
-                        append(row.subject)
-                        append("\n\nDe: ${row.from}")
+                        append(
+                            "De: ${row.from}"
+                        )
 
-                        if (row.to.isNotBlank()) {
-                            append("\nPara: ${row.to}")
+                        if (
+                            row.to.isNotBlank()
+                        ) {
+                            append(
+                                "\nPara: ${row.to}"
+                            )
                         }
 
-                        if (row.cc.isNotBlank()) {
-                            append("\nCc: ${row.cc}")
+                        if (
+                            row.cc.isNotBlank()
+                        ) {
+                            append(
+                                "\nCc: ${row.cc}"
+                            )
                         }
                     }
             }
 
-        content.addView(header)
+        content.addView(
+            subjectView
+        )
 
-        if (htmlBody.isNotBlank()) {
-            /*
-             * Mostra o HTML original do email em vez de o converter
-             * todo para texto simples. Assim preservamos negritos,
-             * itálicos, tamanhos, tabelas, cores e a maior parte do
-             * aspeto original da mensagem.
-             *
-             * JavaScript fica desligado por segurança.
-             */
+        content.addView(
+            fromView
+        )
+
+        val usableHtml =
+            htmlBody.takeIf {
+                htmlLooksUsable(it)
+            }
+
+        if (
+            usableHtml != null
+        ) {
             val webView =
                 WebView(context).apply {
-                    setBackgroundColor(Color.WHITE)
+                    setBackgroundColor(
+                        Color.WHITE
+                    )
 
-                    settings.javaScriptEnabled = false
-                    settings.domStorageEnabled = false
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
+                    settings.javaScriptEnabled =
+                        false
+
+                    settings.domStorageEnabled =
+                        false
+
+                    settings.allowFileAccess =
+                        false
+
+                    settings.allowContentAccess =
+                        false
+
                     settings.mixedContentMode =
-                        WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        WebSettings
+                            .MIXED_CONTENT_COMPATIBILITY_MODE
 
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false
+                    settings.loadWithOverviewMode =
+                        true
+
+                    settings.useWideViewPort =
+                        false
+
+                    settings.builtInZoomControls =
+                        true
+
+                    settings.displayZoomControls =
+                        false
+
+                    settings.defaultFontSize =
+                        16
 
                     webViewClient =
-                        object : WebViewClient() {
+                        object :
+                            WebViewClient() {
 
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?,
-                                request: WebResourceRequest?
+                                request:
+                                    WebResourceRequest?
                             ): Boolean {
+
                                 val uri =
                                     request?.url
                                         ?: return false
@@ -945,11 +1025,14 @@ class GmailPanel(
                                 )
                             }
 
-                            @Suppress("DEPRECATION")
+                            @Suppress(
+                                "DEPRECATION"
+                            )
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?,
                                 url: String?
                             ): Boolean {
+
                                 val target =
                                     url
                                         ?: return false
@@ -961,8 +1044,10 @@ class GmailPanel(
                         }
 
                     loadDataWithBaseURL(
-                        "https://mail.google.com/",
-                        prepareEmailHtml(htmlBody),
+                        null,
+                        prepareEmailHtml(
+                            usableHtml
+                        ),
                         "text/html",
                         "UTF-8",
                         null
@@ -973,86 +1058,179 @@ class GmailPanel(
                 webView,
                 LayoutParams(
                     LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
+                    dpGmail(500)
                 )
             )
 
         } else {
+            /*
+             * Se o HTML for vazio, for apenas tracking, ou falhar o parsing,
+             * mostramos a versão de texto em vez de uma janela branca.
+             */
             val bodyView =
                 TextView(context).apply {
-                    textSize = 16f
-                    setTextIsSelectable(true)
-                    setPadding(4, 10, 4, 16)
-                    text = body
+                    textSize =
+                        16f
+                    setTextColor(
+                        Color.rgb(
+                            32,
+                            33,
+                            36
+                        )
+                    )
+                    setTextIsSelectable(
+                        true
+                    )
+                    setPadding(
+                        4,
+                        18,
+                        4,
+                        20
+                    )
+                    text =
+                        body
                 }
 
             val scroll =
                 ScrollView(context).apply {
-                    addView(bodyView)
+                    addView(
+                        bodyView
+                    )
                 }
 
             content.addView(
                 scroll,
                 LayoutParams(
                     LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
+                    dpGmail(500)
                 )
             )
         }
 
-        AlertDialog.Builder(context)
-            .setTitle("Rita Gmail")
-            .setView(content)
-            .setPositiveButton("Responder") { _, _ ->
+        AlertDialog.Builder(
+            context
+        )
+            .setTitle(
+                "Rita Gmail"
+            )
+            .setView(
+                content
+            )
+            .setPositiveButton(
+                "Responder"
+            ) {
+                    _,
+                    _ ->
+
                 showComposer(
-                    replyRow = row,
-                    replyAll = false
+                    replyRow =
+                        row,
+                    replyAll =
+                        false
                 )
             }
-            .setNeutralButton("Ações") { _, _ ->
+            .setNeutralButton(
+                "Ações"
+            ) {
+                    _,
+                    _ ->
+
                 showSingleActions(
                     row,
                     body
                 )
             }
-            .setNegativeButton("Fechar", null)
+            .setNegativeButton(
+                "Fechar",
+                null
+            )
             .show()
     }
+
+    private fun htmlLooksUsable(
+        html: String
+    ): Boolean {
+        if (
+            html.isBlank()
+        ) {
+            return false
+        }
+
+        val visible =
+            Html.fromHtml(
+                html,
+                Html.FROM_HTML_MODE_LEGACY
+            )
+                .toString()
+                .replace(
+                    Regex("\\s+"),
+                    " "
+                )
+                .trim()
+
+        return visible.length >= 3 ||
+            html.contains(
+                "<img",
+                ignoreCase = true
+            ) ||
+            html.contains(
+                "<table",
+                ignoreCase = true
+            )
+    }
+
+    private fun dpGmail(
+        value: Int
+    ): Int =
+        (
+            value *
+                resources
+                    .displayMetrics
+                    .density
+            )
+            .toInt()
 
     private fun prepareEmailHtml(
         html: String
     ): String {
         val viewport =
-            if (
-                html.contains(
-                    "name=\"viewport\"",
-                    ignoreCase = true
-                ) ||
-                html.contains(
-                    "name='viewport'",
-                    ignoreCase = true
-                )
-            ) {
-                ""
-            } else {
-                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-            }
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=3.0\">"
 
-        val safetyCss =
+        /*
+         * Não removemos estilos do email.
+         * Acrescentamos apenas regras de adaptação ao ecrã pequeno.
+         */
+        val compatibilityCss =
             """
             <style>
+                :root {
+                    color-scheme: light;
+                }
+
                 html, body {
                     max-width: 100% !important;
+                    margin: 0 !important;
+                    padding: 8px !important;
                     overflow-wrap: anywhere;
+                    word-break: normal;
+                    background: #ffffff;
                 }
+
                 img {
                     max-width: 100% !important;
                     height: auto !important;
                 }
+
                 table {
                     max-width: 100% !important;
+                }
+
+                pre {
+                    white-space: pre-wrap !important;
+                }
+
+                a {
+                    cursor: pointer;
                 }
             </style>
             """.trimIndent()
@@ -1074,31 +1252,27 @@ class GmailPanel(
                     "target=\"_self\""
                 )
 
-        return if (
-            clickableHtml.contains(
-                "<head",
-                ignoreCase = true
+        val headRegex =
+            Regex(
+                "<head[^>]*>",
+                RegexOption.IGNORE_CASE
             )
+
+        val match =
+            headRegex.find(
+                clickableHtml
+            )
+
+        return if (
+            match != null
         ) {
-            val headRegex =
-                Regex(
-                    "<head[^>]*>",
-                    RegexOption.IGNORE_CASE
-                )
-
-            val match =
-                headRegex.find(clickableHtml)
-
-            if (match != null) {
-                clickableHtml.replaceRange(
+            clickableHtml
+                .replaceRange(
                     match.range,
-                    "${match.value}$viewport$safetyCss"
+                    "${match.value}$viewport$compatibilityCss"
                 )
-            } else {
-                "<html><head>$viewport$safetyCss</head><body>$clickableHtml</body></html>"
-            }
         } else {
-            "<html><head>$viewport$safetyCss</head><body>$clickableHtml</body></html>"
+            "<html><head>$viewport$compatibilityCss</head><body>$clickableHtml</body></html>"
         }
     }
 
@@ -2126,11 +2300,46 @@ class GmailPanel(
     private fun extractHtmlBody(
         part: JSONObject
     ): String {
+        val candidates =
+            mutableListOf<String>()
+
+        collectHtmlBodies(
+            part,
+            candidates
+        )
+
+        if (candidates.isEmpty()) {
+            return ""
+        }
+
+        /*
+         * Alguns emails multipart contêm vários blocos text/html:
+         * tracking, assinaturas, versões vazias, conteúdo real, etc.
+         * Antes escolhíamos o PRIMEIRO e isso podia resultar numa página
+         * completamente branca.
+         *
+         * Agora escolhemos o bloco com mais conteúdo visível.
+         */
+        return candidates
+            .maxByOrNull {
+                htmlContentScore(it)
+            }
+            .orEmpty()
+    }
+
+    private fun collectHtmlBodies(
+        part: JSONObject,
+        target: MutableList<String>
+    ) {
         val mime =
-            part.optString("mimeType")
+            part.optString(
+                "mimeType"
+            )
 
         val data =
-            part.optJSONObject("body")
+            part.optJSONObject(
+                "body"
+            )
                 ?.optString(
                     "data",
                     ""
@@ -2144,33 +2353,74 @@ class GmailPanel(
                 true
             )
         ) {
-            return String(
-                Base64.decode(
-                    data,
-                    Base64.URL_SAFE or
-                        Base64.NO_WRAP or
-                        Base64.NO_PADDING
-                ),
-                Charsets.UTF_8
-            )
-        }
-
-        val parts =
-            part.optJSONArray("parts")
-                ?: return ""
-
-        for (i in 0 until parts.length()) {
-            val result =
-                extractHtmlBody(
-                    parts.getJSONObject(i)
+            try {
+                target.add(
+                    String(
+                        Base64.decode(
+                            data,
+                            Base64.URL_SAFE or
+                                Base64.NO_WRAP or
+                                Base64.NO_PADDING
+                        ),
+                        Charsets.UTF_8
+                    )
                 )
-
-            if (result.isNotBlank()) {
-                return result
+            } catch (_: Exception) {
             }
         }
 
-        return ""
+        val parts =
+            part.optJSONArray(
+                "parts"
+            )
+                ?: return
+
+        for (
+            i in 0 until
+                parts.length()
+        ) {
+            collectHtmlBodies(
+                parts.getJSONObject(i),
+                target
+            )
+        }
+    }
+
+    private fun htmlContentScore(
+        html: String
+    ): Int {
+        val visible =
+            Html.fromHtml(
+                html,
+                Html.FROM_HTML_MODE_LEGACY
+            )
+                .toString()
+                .replace(
+                    Regex("\\s+"),
+                    " "
+                )
+                .trim()
+                .length
+
+        val images =
+            Regex(
+                "<img\\b",
+                RegexOption.IGNORE_CASE
+            )
+                .findAll(html)
+                .count()
+
+        val links =
+            Regex(
+                "<a\\b",
+                RegexOption.IGNORE_CASE
+            )
+                .findAll(html)
+                .count()
+
+        return visible +
+            images * 150 +
+            links * 30
     }
 
     private fun extractBody(
