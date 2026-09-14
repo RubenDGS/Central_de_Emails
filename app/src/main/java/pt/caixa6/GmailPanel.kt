@@ -3,10 +3,14 @@ package pt.caixa6
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
 import android.graphics.Color
+import android.os.Build
+import android.os.Environment
 import android.graphics.Typeface
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.MediaStore
 import android.text.Html
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
@@ -30,11 +34,13 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.io.File
 import java.util.UUID
 
 class GmailPanel(
@@ -79,6 +85,13 @@ class GmailPanel(
         val uri: Uri,
         val name: String,
         val mime: String
+    )
+
+    data class IncomingAttachment(
+        val name: String,
+        val mime: String,
+        val attachmentId: String,
+        val inlineData: String
     )
 
     private val status: TextView
@@ -823,6 +836,11 @@ class GmailPanel(
                 val htmlBody =
                     extractHtmlBody(payload)
 
+                val incomingAttachments =
+                    collectIncomingAttachments(
+                        payload
+                    )
+
                 val body =
                     extractBody(payload)
                         .ifBlank {
@@ -853,7 +871,8 @@ class GmailPanel(
                     showMessageDialog(
                         row.copy(unread = false),
                         body,
-                        htmlBody
+                        htmlBody,
+                        incomingAttachments
                     )
                     loadCurrentFolder(
                         searchBox.text
@@ -874,7 +893,8 @@ class GmailPanel(
     private fun showMessageDialog(
         row: GmailRow,
         body: String,
-        htmlBody: String
+        htmlBody: String,
+        attachments: List<IncomingAttachment>
     ) {
         val content =
             LinearLayout(context).apply {
@@ -960,6 +980,64 @@ class GmailPanel(
         content.addView(
             fromView
         )
+
+        if (
+            attachments.isNotEmpty()
+        ) {
+            val attachmentTitle =
+                TextView(context).apply {
+                    text =
+                        if (
+                            attachments.size == 1
+                        ) {
+                            "📎 1 anexo"
+                        } else {
+                            "📎 ${attachments.size} anexos"
+                        }
+
+                    textSize = 15f
+
+                    setTypeface(
+                        typeface,
+                        Typeface.BOLD
+                    )
+
+                    setPadding(
+                        4,
+                        16,
+                        4,
+                        6
+                    )
+                }
+
+            content.addView(
+                attachmentTitle
+            )
+
+            attachments.forEach {
+                    attachment ->
+
+                val button =
+                    Button(context).apply {
+                        text =
+                            attachment.name
+
+                        isAllCaps =
+                            false
+
+                        setOnClickListener {
+                            showIncomingAttachmentActions(
+                                row.id,
+                                attachment
+                            )
+                        }
+                    }
+
+                content.addView(
+                    button
+                )
+            }
+        }
 
         val usableHtml =
             htmlBody.takeIf {
@@ -2295,6 +2373,387 @@ class GmailPanel(
             "POST",
             json.toString()
         )
+    }
+
+    private fun collectIncomingAttachments(
+        root: JSONObject
+    ): List<IncomingAttachment> {
+        val result =
+            mutableListOf<IncomingAttachment>()
+
+        fun walk(
+            part: JSONObject
+        ) {
+            val filename =
+                part.optString(
+                    "filename",
+                    ""
+                )
+
+            val mime =
+                part.optString(
+                    "mimeType",
+                    "application/octet-stream"
+                )
+
+            val body =
+                part.optJSONObject(
+                    "body"
+                )
+
+            val attachmentId =
+                body?.optString(
+                    "attachmentId",
+                    ""
+                )
+                    ?: ""
+
+            val inlineData =
+                body?.optString(
+                    "data",
+                    ""
+                )
+                    ?: ""
+
+            if (
+                filename.isNotBlank() &&
+                (
+                    attachmentId.isNotBlank() ||
+                    inlineData.isNotBlank()
+                    )
+            ) {
+                result.add(
+                    IncomingAttachment(
+                        name = filename,
+                        mime = mime,
+                        attachmentId =
+                            attachmentId,
+                        inlineData =
+                            inlineData
+                    )
+                )
+            }
+
+            val parts =
+                part.optJSONArray(
+                    "parts"
+                )
+                    ?: return
+
+            for (
+                i in 0 until
+                    parts.length()
+            ) {
+                walk(
+                    parts.getJSONObject(i)
+                )
+            }
+        }
+
+        walk(root)
+
+        return result
+    }
+
+    private fun showIncomingAttachmentActions(
+        messageId: String,
+        attachment: IncomingAttachment
+    ) {
+        AlertDialog.Builder(
+            context
+        )
+            .setTitle(
+                attachment.name
+            )
+            .setItems(
+                arrayOf(
+                    "Pré-visualizar",
+                    "Descarregar"
+                )
+            ) {
+                    _,
+                    which ->
+
+                when (which) {
+                    0 ->
+                        loadIncomingAttachment(
+                            messageId,
+                            attachment
+                        ) {
+                            bytes ->
+                            previewIncomingAttachment(
+                                attachment,
+                                bytes
+                            )
+                        }
+
+                    1 ->
+                        loadIncomingAttachment(
+                            messageId,
+                            attachment
+                        ) {
+                            bytes ->
+                            saveIncomingAttachment(
+                                attachment,
+                                bytes
+                            )
+                        }
+                }
+            }
+            .setNegativeButton(
+                "Cancelar",
+                null
+            )
+            .show()
+    }
+
+    private fun loadIncomingAttachment(
+        messageId: String,
+        attachment: IncomingAttachment,
+        onLoaded: (ByteArray) -> Unit
+    ) {
+        val token =
+            accessToken
+                ?: return
+
+        progress.visibility =
+            View.VISIBLE
+
+        status.text =
+            "A carregar anexo…"
+
+        Thread {
+            try {
+                val encoded =
+                    if (
+                        attachment.inlineData
+                            .isNotBlank()
+                    ) {
+                        attachment.inlineData
+                    } else {
+                        val json =
+                            apiRequest(
+                                token,
+                                "https://gmail.googleapis.com/gmail/v1/users/me/messages/$messageId/attachments/${attachment.attachmentId}"
+                            )
+
+                        JSONObject(json)
+                            .getString(
+                                "data"
+                            )
+                    }
+
+                val bytes =
+                    Base64.decode(
+                        encoded,
+                        Base64.URL_SAFE or
+                            Base64.NO_WRAP or
+                            Base64.NO_PADDING
+                    )
+
+                post {
+                    progress.visibility =
+                        View.GONE
+
+                    onLoaded(
+                        bytes
+                    )
+                }
+
+            } catch (error: Exception) {
+                post {
+                    progress.visibility =
+                        View.GONE
+
+                    toastError(
+                        error
+                    )
+                }
+            }
+        }.start()
+    }
+
+    private fun saveIncomingAttachment(
+        attachment: IncomingAttachment,
+        bytes: ByteArray
+    ) {
+        try {
+            if (
+                Build.VERSION.SDK_INT >=
+                29
+            ) {
+                val values =
+                    ContentValues()
+                        .apply {
+                            put(
+                                MediaStore.Downloads.DISPLAY_NAME,
+                                attachment.name
+                            )
+
+                            put(
+                                MediaStore.Downloads.MIME_TYPE,
+                                attachment.mime
+                            )
+
+                            put(
+                                MediaStore.Downloads.RELATIVE_PATH,
+                                Environment.DIRECTORY_DOWNLOADS +
+                                    "/Central de Emails"
+                            )
+
+                            put(
+                                MediaStore.Downloads.IS_PENDING,
+                                1
+                            )
+                        }
+
+                val resolver =
+                    context.contentResolver
+
+                val uri =
+                    resolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        values
+                    )
+                        ?: throw IllegalStateException(
+                            "Não foi possível criar o ficheiro."
+                        )
+
+                try {
+                    resolver
+                        .openOutputStream(
+                            uri
+                        )
+                        ?.use {
+                            it.write(
+                                bytes
+                            )
+                        }
+                        ?: throw IllegalStateException(
+                            "Não foi possível escrever o ficheiro."
+                        )
+
+                    values.clear()
+
+                    values.put(
+                        MediaStore.Downloads.IS_PENDING,
+                        0
+                    )
+
+                    resolver.update(
+                        uri,
+                        values,
+                        null,
+                        null
+                    )
+
+                } catch (error: Exception) {
+                    resolver.delete(
+                        uri,
+                        null,
+                        null
+                    )
+
+                    throw error
+                }
+
+            } else {
+                val directory =
+                    context.getExternalFilesDir(
+                        Environment.DIRECTORY_DOWNLOADS
+                    )
+                        ?: context.filesDir
+
+                directory.mkdirs()
+
+                File(
+                    directory,
+                    attachment.name
+                )
+                    .writeBytes(
+                        bytes
+                    )
+            }
+
+            Toast.makeText(
+                context,
+                "Anexo guardado em Downloads: ${attachment.name}",
+                Toast.LENGTH_LONG
+            ).show()
+
+        } catch (error: Exception) {
+            Toast.makeText(
+                context,
+                "Não foi possível descarregar o anexo.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun previewIncomingAttachment(
+        attachment: IncomingAttachment,
+        bytes: ByteArray
+    ) {
+        try {
+            val directory =
+                File(
+                    context.cacheDir,
+                    "attachments"
+                )
+
+            directory.mkdirs()
+
+            val safeName =
+                attachment.name
+                    .replace(
+                        Regex(
+                            """[\\/:*?"<>|]"""
+                        ),
+                        "_"
+                    )
+
+            val file =
+                File(
+                    directory,
+                    safeName
+                )
+
+            file.writeBytes(
+                bytes
+            )
+
+            val uri =
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+
+            val intent =
+                Intent(
+                    Intent.ACTION_VIEW
+                ).apply {
+                    setDataAndType(
+                        uri,
+                        attachment.mime
+                    )
+
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+
+            context.startActivity(
+                intent
+            )
+
+        } catch (error: Exception) {
+            Toast.makeText(
+                context,
+                "Não existe uma aplicação no telemóvel capaz de pré-visualizar este anexo.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun extractHtmlBody(

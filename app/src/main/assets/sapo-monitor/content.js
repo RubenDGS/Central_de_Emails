@@ -89,7 +89,54 @@
     return null;
   }
 
-  function countUnreadInbox() {
+  function stableRowId(row) {
+    if (!row) return null;
+
+    const attrs = [
+      row.getAttribute?.("data-message-id"),
+      row.getAttribute?.("data-id"),
+      row.getAttribute?.("data-uid"),
+      row.id
+    ];
+
+    for (const value of attrs) {
+      if (value && String(value).trim()) {
+        return `id:${String(value).trim()}`;
+      }
+    }
+
+    const link =
+      row.querySelector?.(
+        'a[href*="/message"], a[href*="/messages/"], a[href*="messageId"], a[href*="uid"]'
+      );
+
+    const href =
+      link?.getAttribute?.("href");
+
+    if (href) {
+      return `href:${href}`;
+    }
+
+    /*
+     * Último recurso: hash do conteúdo da linha.
+     * É estável enquanto a mesma mensagem continuar na lista.
+     */
+    const text =
+      norm(row.textContent);
+
+    if (!text) return null;
+
+    let hash = 2166136261;
+
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+
+    return `text:${hash >>> 0}`;
+  }
+
+  function unreadInboxState() {
     if (!isInbox()) return null;
 
     const selectors = [
@@ -139,7 +186,16 @@
     }
 
     if (rows.size > 0) {
-      return rows.size;
+      const unreadIds =
+        Array.from(rows)
+          .map(stableRowId)
+          .filter(Boolean)
+          .sort();
+
+      return {
+        unread: rows.size,
+        unreadIds
+      };
     }
 
     const body =
@@ -149,7 +205,10 @@
       body.includes("caixa de entrada") &&
       document.readyState === "complete"
     ) {
-      return 0;
+      return {
+        unread: 0,
+        unreadIds: []
+      };
     }
 
     return null;
@@ -158,15 +217,16 @@
   function send(force = false) {
     if (!isInbox()) return;
 
-    const unread =
-      countUnreadInbox();
+    const state =
+      unreadInboxState();
 
-    if (unread === null) return;
+    if (state === null) return;
 
     const payload = {
       type: "sapo_state",
       folder: "INBOX",
-      unread,
+      unread: state.unread,
+      unreadIds: state.unreadIds,
       url: location.href
     };
 
@@ -190,7 +250,158 @@
       .catch(() => {});
   }
 
+
+  function findContactsDialog() {
+    const candidates =
+      Array.from(
+        document.querySelectorAll(
+          '[role="dialog"], .modal, .dialog, [class*="popup" i], body > div'
+        )
+      );
+
+    return candidates.find(el => {
+      const text =
+        norm(el.textContent);
+
+      return (
+        text.includes("contactos") &&
+        text.includes("grupos") &&
+        el.querySelector('input[placeholder*="pesquisar" i], input[type="search"]')
+      );
+    }) || null;
+  }
+
+  function contactRows(dialog) {
+    if (!dialog) return [];
+
+    const checkboxes =
+      Array.from(
+        dialog.querySelectorAll(
+          'input[type="checkbox"]'
+        )
+      );
+
+    const rows = [];
+
+    for (const checkbox of checkboxes) {
+      let node =
+        checkbox.parentElement;
+
+      for (
+        let i = 0;
+        i < 6 && node;
+        i++, node = node.parentElement
+      ) {
+        const text =
+          norm(node.textContent);
+
+        if (
+          text.length >= 2 &&
+          text.length <= 500 &&
+          (
+            text.includes("@") ||
+            node.querySelector?.('input[type="checkbox"]')
+          )
+        ) {
+          rows.push(node);
+          break;
+        }
+      }
+    }
+
+    return Array.from(
+      new Set(rows)
+    );
+  }
+
+  function installContactSearchFix() {
+    const dialog =
+      findContactsDialog();
+
+    if (!dialog) return;
+
+    const input =
+      dialog.querySelector(
+        'input[placeholder*="pesquisar" i], input[type="search"]'
+      );
+
+    if (
+      !input ||
+      input.dataset.centralEmailsSearchFixed === "1"
+    ) {
+      return;
+    }
+
+    input.dataset.centralEmailsSearchFixed =
+      "1";
+
+    const rows =
+      contactRows(dialog);
+
+    const filter = () => {
+      const query =
+        norm(input.value);
+
+      for (const row of rows) {
+        if (!query) {
+          row.style.removeProperty(
+            "display"
+          );
+          continue;
+        }
+
+        const haystack =
+          norm(row.textContent);
+
+        row.style.display =
+          haystack.includes(query)
+            ? ""
+            : "none";
+      }
+    };
+
+    input.addEventListener(
+      "input",
+      filter
+    );
+
+    input.addEventListener(
+      "keydown",
+      event => {
+        if (
+          event.key === "Enter"
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          filter();
+        }
+      },
+      true
+    );
+
+    const searchButton =
+      input.parentElement
+        ?.querySelector(
+          'button, [role="button"], input[type="submit"]'
+        ) ||
+      input.parentElement
+        ?.nextElementSibling;
+
+    if (searchButton) {
+      searchButton.addEventListener(
+        "click",
+        event => {
+          event.preventDefault();
+          event.stopPropagation();
+          filter();
+        },
+        true
+      );
+    }
+  }
+
   send(true);
+  installContactSearchFix();
 
   const observer =
     new MutationObserver(() => {
@@ -202,6 +413,16 @@
         setTimeout(
           () => send(false),
           500
+        );
+
+      clearTimeout(
+        window.__centralEmailsContactsTimer
+      );
+
+      window.__centralEmailsContactsTimer =
+        setTimeout(
+          installContactSearchFix,
+          250
         );
     });
 
@@ -235,7 +456,10 @@
   );
 
   setInterval(
-    () => send(true),
+    () => {
+      send(true);
+      installContactSearchFix();
+    },
     10000
   );
 })();

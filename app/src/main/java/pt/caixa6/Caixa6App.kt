@@ -6,16 +6,20 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.os.Environment
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -34,9 +38,11 @@ import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebResponse
 import org.mozilla.geckoview.WebNotification
 import org.mozilla.geckoview.WebNotificationDelegate
 import java.net.HttpURLConnection
+import java.net.URLDecoder
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -86,6 +92,9 @@ class Caixa6App : Application(), Configuration.Provider {
     private var notificationHintUntil = 0L
 
     private val lastWebNotificationAt =
+        mutableMapOf<String, Long>()
+
+    private val lastSapoMonitorNotificationAt =
         mutableMapOf<String, Long>()
 
     private val unreadCounts =
@@ -246,6 +255,18 @@ class Caixa6App : Application(), Configuration.Provider {
                 override fun onKill(session: GeckoSession) {
                     forgetSession(account.id)
                 }
+
+                /*
+                 * GeckoView envia para aqui respostas que não consegue
+                 * apresentar diretamente (por exemplo, anexos/downloads).
+                 * Guardamos o ficheiro na pasta Downloads do Android.
+                 */
+                override fun onExternalResponse(
+                    session: GeckoSession,
+                    response: WebResponse
+                ) {
+                    saveSapoDownload(response)
+                }
             }
         )
 
@@ -272,14 +293,22 @@ class Caixa6App : Application(), Configuration.Provider {
                     val uri =
                         request.uri
 
-                    val scheme =
+                    val parsed =
                         try {
                             Uri.parse(uri)
-                                .scheme
-                                ?.lowercase()
                         } catch (_: Exception) {
                             null
                         }
+
+                    val scheme =
+                        parsed
+                            ?.scheme
+                            ?.lowercase()
+
+                    val host =
+                        parsed
+                            ?.host
+                            ?.lowercase()
 
                     if (
                         request.hasUserGesture &&
@@ -296,10 +325,27 @@ class Caixa6App : Application(), Configuration.Provider {
                     }
 
                     /*
-                     * GeckoView encaminharia TARGET_WINDOW_NEW para
-                     * onNewSession(). Tratamos aí para não perder links
-                     * target="_blank" nem botões/imagens clicáveis.
+                     * A pré-visualização de anexos do SAPO usa frequentemente
+                     * target=_blank/window.open e URLs internas /v7/imp/...
+                     * Se mandarmos essa URL para o Chrome perde o contexto
+                     * autenticado e aparece 404. Mantemos URLs mail.sapo.pt
+                     * dentro da MESMA GeckoSession.
                      */
+                    if (
+                        request.target ==
+                            GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW &&
+                        (
+                            host == "mail.sapo.pt" ||
+                            host?.endsWith(".sapo.pt") == true
+                            )
+                    ) {
+                        session.loadUri(uri)
+
+                        return GeckoResult.fromValue(
+                            AllowOrDeny.DENY
+                        )
+                    }
+
                     return null
                 }
 
@@ -308,13 +354,29 @@ class Caixa6App : Application(), Configuration.Provider {
                     uri: String
                 ): GeckoResult<GeckoSession>? {
 
-                    openExternalUri(uri)
+                    val host =
+                        try {
+                            Uri.parse(uri)
+                                .host
+                                ?.lowercase()
+                        } catch (_: Exception) {
+                            null
+                        }
 
                     /*
-                     * Devolvemos null intencionalmente porque o link já foi
-                     * tratado pelo Android e não queremos criar uma segunda
-                     * janela Gecko invisível.
+                     * Como salvaguarda, uma URL interna SAPO nunca é enviada
+                     * para um navegador externo. O caso normal já é tratado
+                     * em onLoadRequest.
                      */
+                    if (
+                        host == "mail.sapo.pt" ||
+                        host?.endsWith(".sapo.pt") == true
+                    ) {
+                        session.loadUri(uri)
+                        return null
+                    }
+
+                    openExternalUri(uri)
                     return null
                 }
             }
@@ -392,6 +454,33 @@ class Caixa6App : Application(), Configuration.Provider {
                                     )
 
                                 if (unread >= 0) {
+                                    val unreadIds =
+                                        linkedSetOf<String>()
+
+                                    val ids =
+                                        message.optJSONArray(
+                                            "unreadIds"
+                                        )
+
+                                    if (ids != null) {
+                                        for (
+                                            i in 0 until
+                                                ids.length()
+                                        ) {
+                                            val id =
+                                                ids.optString(
+                                                    i,
+                                                    ""
+                                                )
+
+                                            if (
+                                                id.isNotBlank()
+                                            ) {
+                                                unreadIds.add(id)
+                                            }
+                                        }
+                                    }
+
                                     handler.post {
                                         sapoLastStateAt[
                                             accountId
@@ -400,7 +489,8 @@ class Caixa6App : Application(), Configuration.Provider {
 
                                         updateSapoUnread(
                                             accountId,
-                                            unread
+                                            unread,
+                                            unreadIds
                                         )
                                     }
                                 }
@@ -422,7 +512,8 @@ class Caixa6App : Application(), Configuration.Provider {
 
     private fun updateSapoUnread(
         accountId: String,
-        newCount: Int
+        newCount: Int,
+        unreadIds: Set<String> = emptySet()
     ) {
         val prefs =
             getSharedPreferences(
@@ -431,7 +522,10 @@ class Caixa6App : Application(), Configuration.Provider {
             )
 
         val baselineKey =
-            "baseline_inbox_unread_v3_$accountId"
+            "baseline_inbox_unread_v4_$accountId"
+
+        val notifiedIdsKey =
+            "sapo_notified_ids_v1_$accountId"
 
         val hadBaseline =
             prefs.getBoolean(
@@ -440,9 +534,13 @@ class Caixa6App : Application(), Configuration.Provider {
             )
 
         val oldCount =
-            unreadCounts[accountId] ?: 0
+            unreadCounts[
+                accountId
+            ] ?: 0
 
-        unreadCounts[accountId] =
+        unreadCounts[
+            accountId
+        ] =
             newCount
 
         saveUnread(
@@ -455,17 +553,126 @@ class Caixa6App : Application(), Configuration.Provider {
             newCount
         )
 
+        val notifiedIds =
+            prefs.getStringSet(
+                notifiedIdsKey,
+                emptySet()
+            )
+                ?.toMutableSet()
+                ?: mutableSetOf()
+
         if (!hadBaseline) {
+            /*
+             * Tudo o que já estava por ler quando estabelecemos a primeira
+             * referência é considerado "já conhecido": não dispara avisos
+             * antigos nem volta a avisar o mesmo email.
+             */
+            if (
+                unreadIds.isNotEmpty()
+            ) {
+                notifiedIds.addAll(
+                    unreadIds
+                )
+            }
+
             prefs.edit()
                 .putBoolean(
                     baselineKey,
                     true
                 )
+                .putStringSet(
+                    notifiedIdsKey,
+                    notifiedIds
+                        .takeLastSafe(500)
+                        .toSet()
+                )
                 .apply()
+
             return
         }
 
-        if (newCount > oldCount) {
+        /*
+         * Quando o monitor consegue identificar as mensagens, usamos IDs
+         * persistentes. Um email notificado uma vez nunca volta a notificar
+         * só porque continua por ler.
+         */
+        if (
+            unreadIds.isNotEmpty()
+        ) {
+            val newIds =
+                unreadIds -
+                    notifiedIds
+
+            if (
+                newIds.isNotEmpty()
+            ) {
+                notifiedIds.addAll(
+                    newIds
+                )
+
+                prefs.edit()
+                    .putStringSet(
+                        notifiedIdsKey,
+                        notifiedIds
+                            .takeLastSafe(500)
+                            .toSet()
+                    )
+                    .apply()
+
+                val difference =
+                    newIds.size
+
+                val now =
+                    SystemClock.elapsedRealtime()
+
+                val lastWeb =
+                    lastWebNotificationAt[
+                        accountId
+                    ] ?: 0L
+
+                if (
+                    now - lastWeb >
+                    30_000L
+                ) {
+                    lastSapoMonitorNotificationAt[
+                        accountId
+                    ] = now
+
+                    showAccountNotification(
+                        accountId,
+                        if (
+                            difference == 1
+                        ) {
+                            "1 novo email"
+                        } else {
+                            "$difference novos emails"
+                        },
+                        "Tens $newCount emails por ler na Caixa de Entrada.",
+                        "sapo_ids_" +
+                            newIds
+                                .sorted()
+                                .joinToString("_")
+                                .hashCode()
+                    )
+                }
+            }
+
+            return
+        }
+
+        /*
+         * Fallback para uma página SAPO em que não seja possível extrair IDs.
+         * Conserva o comportamento anterior, mas só reage a uma subida real
+         * do contador.
+         */
+        if (
+            newCount >
+            oldCount
+        ) {
+            val difference =
+                newCount -
+                    oldCount
+
             val now =
                 SystemClock.elapsedRealtime()
 
@@ -478,21 +685,37 @@ class Caixa6App : Application(), Configuration.Provider {
                 now - lastWeb >
                 30_000L
             ) {
-                val difference =
-                    newCount - oldCount
+                lastSapoMonitorNotificationAt[
+                    accountId
+                ] = now
 
                 showAccountNotification(
                     accountId,
-                    if (difference == 1) {
+                    if (
+                        difference == 1
+                    ) {
                         "1 novo email"
                     } else {
                         "$difference novos emails"
                     },
-                    "Tens $newCount emails por ler na Caixa de Entrada."
+                    "Tens $newCount emails por ler na Caixa de Entrada.",
+                    "sapo_count_${newCount}"
                 )
             }
         }
     }
+
+    private fun Set<String>.takeLastSafe(
+        max: Int
+    ): List<String> =
+        if (
+            size <= max
+        ) {
+            toList()
+        } else {
+            toList()
+                .takeLast(max)
+        }
 
     private fun handleWebNotification(
         notification: WebNotification
@@ -500,14 +723,84 @@ class Caixa6App : Application(), Configuration.Provider {
         val accountId =
             hintedAccount()
 
-        lastWebNotificationAt[accountId] =
+        lastWebNotificationAt[
+            accountId
+        ] =
             SystemClock.elapsedRealtime()
+
+        val title =
+            notification.title
+                ?: "Novo email"
+
+        val text =
+            notification.text
+                ?: "Recebeste uma nova mensagem."
+
+        val fingerprint =
+            (
+                notification.tag +
+                    "|" +
+                    title +
+                    "|" +
+                    text
+                )
+                .hashCode()
+                .toString()
+
+        val prefs =
+            getSharedPreferences(
+                "central-emails",
+                MODE_PRIVATE
+            )
+
+        val key =
+            "sapo_web_notified_v1_$accountId"
+
+        val seen =
+            prefs.getStringSet(
+                key,
+                emptySet()
+            )
+                ?.toMutableSet()
+                ?: mutableSetOf()
+
+        if (
+            !seen.add(
+                fingerprint
+            )
+        ) {
+            return
+        }
+
+        val now =
+            SystemClock.elapsedRealtime()
+
+        val lastMonitor =
+            lastSapoMonitorNotificationAt[
+                accountId
+            ] ?: 0L
+
+        prefs.edit()
+            .putStringSet(
+                key,
+                seen
+                    .takeLastSafe(500)
+                    .toSet()
+            )
+            .apply()
+
+        if (
+            now - lastMonitor <=
+            30_000L
+        ) {
+            return
+        }
 
         showAccountNotification(
             accountId,
-            notification.title ?: "Novo email",
-            notification.text ?: "Recebeste uma nova mensagem.",
-            notification.tag
+            title,
+            text,
+            "web_$fingerprint"
         )
     }
 
@@ -1377,10 +1670,10 @@ class Caixa6App : Application(), Configuration.Provider {
             )
 
         val baselineKey =
-            "gmail_worker_ids_baseline_v2"
+            "gmail_worker_ids_baseline_v3"
 
-        val idsKey =
-            "gmail_worker_unread_ids_v2"
+        val notifiedKey =
+            "gmail_notified_message_ids_v1"
 
         val hadBaseline =
             prefs.getBoolean(
@@ -1388,50 +1681,95 @@ class Caixa6App : Application(), Configuration.Provider {
                 false
             )
 
-        val previousIds =
+        val notifiedIds =
             prefs.getStringSet(
-                idsKey,
+                notifiedKey,
                 emptySet()
             )
-                ?.toSet()
-                ?: emptySet()
+                ?.toMutableSet()
+                ?: mutableSetOf()
+
+        if (!hadBaseline) {
+            /*
+             * Emails que já estavam por ler quando o worker estabelece a
+             * referência são conhecidos e não devem gerar notificações antigas.
+             */
+            notifiedIds.addAll(
+                currentIds
+            )
+
+            prefs.edit()
+                .putBoolean(
+                    baselineKey,
+                    true
+                )
+                .putStringSet(
+                    notifiedKey,
+                    notifiedIds
+                        .takeLastSafe(1000)
+                        .toSet()
+                )
+                .apply()
+
+            setGmailUnread(
+                currentUnread
+            )
+
+            return
+        }
 
         val newIds =
-            if (hadBaseline) {
-                currentIds - previousIds
-            } else {
-                emptySet()
-            }
+            currentIds -
+                notifiedIds
 
-        prefs.edit()
-            .putBoolean(
-                baselineKey,
-                true
+        if (
+            newIds.isNotEmpty()
+        ) {
+            notifiedIds.addAll(
+                newIds
             )
-            .putStringSet(
-                idsKey,
-                currentIds.toSet()
-            )
-            .apply()
 
-        setGmailUnread(currentUnread)
+            prefs.edit()
+                .putStringSet(
+                    notifiedKey,
+                    notifiedIds
+                        .takeLastSafe(1000)
+                        .toSet()
+                )
+                .apply()
+        }
 
-        if (newIds.isNotEmpty()) {
+        setGmailUnread(
+            currentUnread
+        )
+
+        if (
+            newIds.isNotEmpty()
+        ) {
             val difference =
                 newIds.size
 
             showAccountNotification(
                 "rita_gmail",
-                if (difference == 1) {
+                if (
+                    difference == 1
+                ) {
                     "1 novo email"
                 } else {
                     "$difference novos emails"
                 },
-                if (currentUnread == 1) {
+                if (
+                    currentUnread == 1
+                ) {
                     "Tens 1 email por ler na Caixa de Entrada."
                 } else {
                     "Tens $currentUnread emails por ler na Caixa de Entrada."
-                }
+                },
+                "gmail_ids_" +
+                    newIds
+                        .sorted()
+                        .joinToString("_")
+                        .hashCode()
             )
         }
     }
@@ -1516,6 +1854,255 @@ class Caixa6App : Application(), Configuration.Provider {
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
+    }
+
+    private fun saveSapoDownload(
+        response: WebResponse
+    ) {
+        val body =
+            response.body
+
+        if (
+            body == null
+        ) {
+            return
+        }
+
+        val contentType =
+            response.headers[
+                "content-type"
+            ]
+                ?.substringBefore(";")
+                ?.trim()
+                ?.ifBlank {
+                    null
+                }
+                ?: "application/octet-stream"
+
+        val filename =
+            filenameFromResponse(
+                response
+            )
+
+        Thread {
+            try {
+                body.use {
+                    saveStreamToDownloads(
+                        filename,
+                        contentType,
+                        it
+                    )
+                }
+
+                handler.post {
+                    Toast.makeText(
+                        this,
+                        "Anexo guardado em Downloads: $filename",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+            } catch (error: Exception) {
+                try {
+                    body.close()
+                } catch (_: Exception) {
+                }
+
+                Log.e(
+                    "CentralEmails",
+                    "Erro ao descarregar anexo SAPO",
+                    error
+                )
+
+                handler.post {
+                    Toast.makeText(
+                        this,
+                        "Não foi possível descarregar o anexo.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun filenameFromResponse(
+        response: WebResponse
+    ): String {
+        val disposition =
+            response.headers[
+                "content-disposition"
+            ]
+                .orEmpty()
+
+        val utf8 =
+            Regex(
+                """filename\*=UTF-8''([^;]+)""",
+                RegexOption.IGNORE_CASE
+            )
+                .find(
+                    disposition
+                )
+                ?.groupValues
+                ?.getOrNull(1)
+
+        if (
+            !utf8.isNullOrBlank()
+        ) {
+            return try {
+                URLDecoder.decode(
+                    utf8,
+                    "UTF-8"
+                )
+            } catch (_: Exception) {
+                utf8
+            }
+        }
+
+        val normal =
+            Regex(
+                """filename="?([^";]+)"?""",
+                RegexOption.IGNORE_CASE
+            )
+                .find(
+                    disposition
+                )
+                ?.groupValues
+                ?.getOrNull(1)
+
+        if (
+            !normal.isNullOrBlank()
+        ) {
+            return normal
+        }
+
+        val fromUri =
+            try {
+                Uri.parse(
+                    response.uri
+                )
+                    .lastPathSegment
+            } catch (_: Exception) {
+                null
+            }
+
+        return fromUri
+            ?.takeIf {
+                it.isNotBlank() &&
+                    it.length < 120
+            }
+            ?: "anexo"
+    }
+
+    private fun saveStreamToDownloads(
+        filename: String,
+        mime: String,
+        input: java.io.InputStream
+    ) {
+        if (
+            Build.VERSION.SDK_INT >=
+            29
+        ) {
+            val values =
+                ContentValues()
+                    .apply {
+                        put(
+                            MediaStore.Downloads.DISPLAY_NAME,
+                            filename
+                        )
+
+                        put(
+                            MediaStore.Downloads.MIME_TYPE,
+                            mime
+                        )
+
+                        put(
+                            MediaStore.Downloads.RELATIVE_PATH,
+                            Environment.DIRECTORY_DOWNLOADS +
+                                "/Central de Emails"
+                        )
+
+                        put(
+                            MediaStore.Downloads.IS_PENDING,
+                            1
+                        )
+                    }
+
+            val resolver =
+                contentResolver
+
+            val uri =
+                resolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    values
+                )
+                    ?: throw IllegalStateException(
+                        "Não foi possível criar o ficheiro."
+                    )
+
+            try {
+                resolver
+                    .openOutputStream(
+                        uri
+                    )
+                    ?.use {
+                        output ->
+                        input.copyTo(
+                            output
+                        )
+                    }
+                    ?: throw IllegalStateException(
+                        "Não foi possível abrir o ficheiro."
+                    )
+
+                values.clear()
+
+                values.put(
+                    MediaStore.Downloads.IS_PENDING,
+                    0
+                )
+
+                resolver.update(
+                    uri,
+                    values,
+                    null,
+                    null
+                )
+
+            } catch (error: Exception) {
+                resolver.delete(
+                    uri,
+                    null,
+                    null
+                )
+
+                throw error
+            }
+
+        } else {
+            val directory =
+                getExternalFilesDir(
+                    Environment.DIRECTORY_DOWNLOADS
+                )
+                    ?: filesDir
+
+            if (
+                !directory.exists()
+            ) {
+                directory.mkdirs()
+            }
+
+            java.io.File(
+                directory,
+                filename
+            )
+                .outputStream()
+                .use {
+                    output ->
+                    input.copyTo(
+                        output
+                    )
+                }
+        }
     }
 
     private fun openExternalUri(
