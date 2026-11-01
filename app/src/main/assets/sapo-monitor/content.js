@@ -2,6 +2,22 @@
   const NATIVE_APP = "sapoMonitor";
   const INBOX_TOKEN = "SU5CT1g";
   let lastSent = null;
+  let ignoreMoveUntil = 0;
+
+  document.addEventListener("click", event => {
+    const control = event.target?.closest?.(
+      'button, [role="button"], a, [role="menuitem"]'
+    );
+    const label = norm([
+      control?.textContent,
+      control?.getAttribute?.("title"),
+      control?.getAttribute?.("aria-label")
+    ].join(" "));
+    if (/mover|move to|apagar|eliminar|lixo|trash|restaurar|archive|arquivar/.test(label)) {
+      ignoreMoveUntil = Date.now() + 12000;
+    }
+  }, true);
+
 
   const norm = v =>
     String(v || "")
@@ -215,7 +231,7 @@
   }
 
   function send(force = false) {
-    if (!isInbox()) return;
+    if (!isInbox() || Date.now() < ignoreMoveUntil) return;
 
     const state =
       unreadInboxState();
@@ -399,6 +415,42 @@
       );
     }
   }
+
+  // Destinatários SAPO: confirmar endereços escritos manualmente.
+  // Não substituímos o editor SAPO: usamos os eventos nativos para que
+  // a aplicação Web crie os seus próprios chips/destinatários.
+  const emailPattern = /^[^\\s@,;<>]+@[^\\s@,;<>]+\\.[^\\s@,;<>]+$/;
+  function recipientInput(input) {
+    if (!input || !input.matches?.('input, [contenteditable="true"]')) return false;
+    const parent = input.closest?.('[class*="recipient" i], [class*="address" i], [class*="destinat" i], [class*="to-field" i], [class*="cc-field" i], [class*="bcc-field" i]');
+    const hint = norm([
+      input.getAttribute('placeholder'),
+      input.getAttribute('aria-label'),
+      input.getAttribute('name'),
+      parent?.getAttribute('class'),
+      parent?.getAttribute('aria-label')
+    ].join(' '));
+    return /destinat|recipient|endereço|email|e-mail|\\bpara\\b|\\bto\\b|\\bcc\\b|\\bbcc\\b|\\bcco\\b/.test(hint);
+  }
+  function commitRecipient(input) {
+    if (!recipientInput(input)) return;
+    const value = (input.value ?? input.textContent ?? '').trim();
+    if (!emailPattern.test(value)) return;
+    // O editor SAPO é responsável por validar e criar o destinatário.
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+    }));
+    input.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+    }));
+  }
+  document.addEventListener('focusout', event => {
+    commitRecipient(event.target);
+  }, true);
+  document.addEventListener('keydown', event => {
+    if (!recipientInput(event.target)) return;
+    if (event.key === 'Tab') commitRecipient(event.target);
+  }, true);
 
   send(true);
   installContactSearchFix();
