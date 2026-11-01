@@ -834,7 +834,12 @@ class GmailPanel(
                     )
 
                 val htmlBody =
-                    extractHtmlBody(payload)
+                    resolveInlineGmailImages(
+                        token,
+                        original.id,
+                        payload,
+                        extractHtmlBody(payload)
+                    )
 
                 val incomingAttachments =
                     collectIncomingAttachments(
@@ -1073,7 +1078,7 @@ class GmailPanel(
                         true
 
                     settings.useWideViewPort =
-                        false
+                        true
 
                     settings.builtInZoomControls =
                         true
@@ -1289,7 +1294,7 @@ class GmailPanel(
                     max-width: 100% !important;
                     margin: 0 !important;
                     padding: 8px !important;
-                    overflow-wrap: anywhere;
+                    overflow-wrap: normal;
                     word-break: normal;
                     background: #ffffff;
                 }
@@ -1299,8 +1304,14 @@ class GmailPanel(
                     height: auto !important;
                 }
 
+                /* Manter a geometria original das tabelas de assinatura.
+                   O utilizador pode deslocar horizontalmente o conteúdo. */
                 table {
-                    max-width: 100% !important;
+                    max-width: none;
+                }
+                td, th {
+                    overflow-wrap: normal;
+                    word-break: normal;
                 }
 
                 pre {
@@ -2754,6 +2765,68 @@ class GmailPanel(
                 Toast.LENGTH_LONG
             ).show()
         }
+    }
+
+    /*
+     * Imagens MIME com Content-ID são recursos internos da mensagem.
+     * O WebView não consegue resolver cid: sozinho; convertemos apenas
+     * as imagens efetivamente referenciadas em data URLs.
+     */
+    private fun resolveInlineGmailImages(
+        token: String,
+        messageId: String,
+        payload: JSONObject,
+        html: String
+    ): String {
+        if (!html.contains("cid:", ignoreCase = true)) return html
+
+        var resolved = html
+        fun walk(part: JSONObject) {
+            val headers = part.optJSONArray("headers")
+            var contentId = ""
+            if (headers != null) {
+                for (i in 0 until headers.length()) {
+                    val header = headers.optJSONObject(i) ?: continue
+                    if (header.optString("name").equals("Content-ID", true)) {
+                        contentId = header.optString("value")
+                            .trim().removePrefix("<").removeSuffix(">")
+                        break
+                    }
+                }
+            }
+            val mime = part.optString("mimeType")
+            if (contentId.isNotBlank() && mime.startsWith("image/", true)) {
+                val body = part.optJSONObject("body")
+                var encoded = body?.optString("data").orEmpty()
+                val attachmentId = body?.optString("attachmentId").orEmpty()
+                if (encoded.isBlank() && attachmentId.isNotBlank()) {
+                    try {
+                        val response = apiRequest(
+                            token,
+                            "https://gmail.googleapis.com/gmail/v1/users/me/messages/$messageId/attachments/$attachmentId"
+                        )
+                        encoded = JSONObject(response).optString("data")
+                    } catch (_: Exception) {
+                    }
+                }
+                if (encoded.isNotBlank() && encoded.length <= 2_800_000) {
+                    val base64 = encoded.replace('-', '+').replace('_', '/')
+                    val uri = "data:$mime;base64,$base64"
+                    resolved = resolved.replace(
+                        "cid:$contentId", uri, ignoreCase = true
+                    )
+                    resolved = resolved.replace(
+                        "cid:%3C$contentId%3E", uri, ignoreCase = true
+                    )
+                }
+            }
+            val parts = part.optJSONArray("parts") ?: return
+            for (i in 0 until parts.length()) {
+                parts.optJSONObject(i)?.let { walk(it) }
+            }
+        }
+        walk(payload)
+        return resolved
     }
 
     private fun extractHtmlBody(

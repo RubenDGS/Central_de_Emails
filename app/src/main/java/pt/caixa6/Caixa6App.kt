@@ -661,48 +661,12 @@ class Caixa6App : Application(), Configuration.Provider {
         }
 
         /*
-         * Fallback para uma página SAPO em que não seja possível extrair IDs.
-         * Conserva o comportamento anterior, mas só reage a uma subida real
-         * do contador.
+         * Sem IDs estáveis não é possível distinguir a chegada de um email
+         * de uma alteração de contador causada por mover mensagens.
+         * Preferimos não emitir falsos avisos.
          */
-        if (
-            newCount >
-            oldCount
-        ) {
-            val difference =
-                newCount -
-                    oldCount
+        return
 
-            val now =
-                SystemClock.elapsedRealtime()
-
-            val lastWeb =
-                lastWebNotificationAt[
-                    accountId
-                ] ?: 0L
-
-            if (
-                now - lastWeb >
-                30_000L
-            ) {
-                lastSapoMonitorNotificationAt[
-                    accountId
-                ] = now
-
-                showAccountNotification(
-                    accountId,
-                    if (
-                        difference == 1
-                    ) {
-                        "1 novo email"
-                    } else {
-                        "$difference novos emails"
-                    },
-                    "Tens $newCount emails por ler na Caixa de Entrada.",
-                    "sapo_count_${newCount}"
-                )
-            }
-        }
     }
 
     private fun Set<String>.takeLastSafe(
